@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentscan/agentscan/internal/sseutil"
 	"github.com/agentscan/agentscan/pkg/models"
 )
 
@@ -50,7 +51,7 @@ func EnumerateTools(ctx context.Context, baseURL, endpoint, sessionID, hostname 
 	var data map[string]interface{}
 	ct := resp.Header.Get("Content-Type")
 	if strings.Contains(ct, "text/event-stream") {
-		data = parseFirstSSEMessage(resp.Body)
+		data = sseutil.ParseFirstMessage(resp.Body)
 	} else {
 		limitedBody := io.LimitReader(resp.Body, 1<<20)
 		json.NewDecoder(limitedBody).Decode(&data)

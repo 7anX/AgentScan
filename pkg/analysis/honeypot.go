@@ -1,7 +1,7 @@
+// Package analysis provides MCP server behavior analysis.
 package analysis
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentscan/agentscan/internal/sseutil"
 	"github.com/agentscan/agentscan/pkg/models"
 )
 
@@ -27,7 +28,7 @@ func DetectHoneypot(ctx context.Context, server *models.MCPServer, hostname stri
 
 	probeURL := server.URL + server.Endpoint
 
-	// 信号1：发送非法版本，规范要求服务器返回支持的版本或 -32602 错误
+	// 信号1：发送非法版本
 	data, _ := sendInitProbe(ctx, client, probeURL, "9999-99-99")
 	if data != nil {
 		if _, hasResult := data["result"]; hasResult {
@@ -38,7 +39,7 @@ func DetectHoneypot(ctx context.Context, server *models.MCPServer, hostname stri
 		}
 	}
 
-	// 信号2：两次 initialize 对比 session ID
+	// 信号2：两次 session ID 对比
 	if server.SessionID != "" {
 		_, sid2 := sendInitProbe(ctx, client, probeURL, "2025-06-18")
 		if sid2 != "" && sid2 == server.SessionID {
@@ -77,17 +78,9 @@ func newTLSClient(hostname string, timeout time.Duration) *http.Client {
 	}
 }
 
+// sendInitProbe 发送 initialize 请求，返回响应数据和 session ID
 func sendInitProbe(ctx context.Context, client *http.Client, url, version string) (map[string]interface{}, string) {
-	body, _ := json.Marshal(map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "initialize",
-		"params": map[string]interface{}{
-			"protocolVersion": version,
-			"capabilities":    map[string]interface{}{},
-			"clientInfo":      map[string]interface{}{"name": "agentscan", "version": "1.0.0"},
-		},
-	})
+	body := buildProbeBody(version)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
@@ -107,32 +100,26 @@ func sendInitProbe(ctx context.Context, client *http.Client, url, version string
 	ct := resp.Header.Get("Content-Type")
 	var data map[string]interface{}
 	if strings.Contains(ct, "text/event-stream") {
-		data = parseSSEFirstMessage(resp.Body)
+		// 使用 sseutil 共享实现，消除与 mcp_probe.go 的代码重复
+		data = sseutil.ParseFirstMessage(io.LimitReader(resp.Body, 2<<20))
 	} else {
-		json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&data)
+		// decode error is non-fatal; nil data handled by caller
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&data)
 	}
 	return data, sid
 }
-
-func parseSSEFirstMessage(r io.Reader) map[string]interface{} {
-	scanner := bufio.NewScanner(r)
-	var eventType, dataLine string
-	for scanner.Scan() {
-		line := scanner.Text()
-		switch {
-		case strings.HasPrefix(line, "event:"):
-			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-		case strings.HasPrefix(line, "data:"):
-			dataLine = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		case line == "" && dataLine != "":
-			if eventType == "" || eventType == "message" {
-				var d map[string]interface{}
-				if json.Unmarshal([]byte(dataLine), &d) == nil {
-					return d
-				}
-			}
-			eventType, dataLine = "", ""
-		}
-	}
-	return nil
+// buildProbeBody 构造 MCP initialize 请求体。
+// 逻辑与 scanner.initializeRequest 相同，这里独立实现以避免包循环依赖。
+func buildProbeBody(version string) []byte {
+	b, _ := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params": map[string]interface{}{
+			"protocolVersion": version,
+			"capabilities":    map[string]interface{}{},
+			"clientInfo":      map[string]interface{}{"name": "agentscan", "version": "1.0.0"},
+		},
+	})
+	return b
 }

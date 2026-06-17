@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -281,33 +282,24 @@ func isNumeric(s string) bool {
 
 // extractURLPath 从 URL 中提取路径部分（不含 query/fragment）
 func extractURLPath(rawURL string) string {
-	u := rawURL
-	if idx := strings.Index(u, "://"); idx >= 0 {
-		u = u[idx+3:]
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Path == "" || u.Path == "/" {
+		return "/"
 	}
-	// 去掉 host:port 部分，保留 /path
-	if idx := strings.Index(u, "/"); idx >= 0 {
-		return u[idx:]
-	}
-	return "/"
+	return u.Path
 }
 
 func extractHostPort(rawURL string) (string, int, error) {
-	u := rawURL
-	if idx := strings.Index(u, "://"); idx >= 0 {
-		u = u[idx+3:]
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", 0, fmt.Errorf("parse URL: %w", err)
 	}
-	if idx := strings.IndexAny(u, "/?#"); idx >= 0 {
-		u = u[:idx]
+	host := u.Hostname()
+	portStr := u.Port()
+	if portStr == "" {
+		return host, 0, nil
 	}
-	if strings.Contains(u, ":") {
-		host, portStr, err := net.SplitHostPort(u)
-		if err != nil {
-			return "", 0, err
-		}
-		var port int
-		fmt.Sscanf(portStr, "%d", &port)
-		return host, port, nil
-	}
-	return u, 0, nil
+	var port int
+	fmt.Sscanf(portStr, "%d", &port)
+	return host, port, nil
 }

@@ -1,7 +1,6 @@
 package scanner
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -10,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentscan/agentscan/internal/sseutil"
 	"github.com/agentscan/agentscan/pkg/models"
 )
 
@@ -153,7 +153,7 @@ func tryStreamableHTTP(ctx context.Context, client *http.Client, url string) *Pr
 
 	// 规范允许两种响应形式，都要处理
 	if strings.Contains(ct, "text/event-stream") {
-		data = parseFirstSSEMessage(io.LimitReader(resp.Body, 2<<20)) // 2MB 上限防止恶意服务器无限流
+		data = sseutil.ParseFirstMessage(io.LimitReader(resp.Body, 2<<20)) // 2MB 上限防止恶意服务器无限流
 	} else {
 		limitedBody := io.LimitReader(resp.Body, 1<<20) // 1MB
 		if err := json.NewDecoder(limitedBody).Decode(&data); err != nil {
@@ -201,7 +201,7 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL string, 
 		return nil
 	}
 	// 读取 endpoint event 后立即排尽并关闭，防止 FD 泄漏
-	postPath := parseEndpointEvent(resp.Body)
+	postPath := sseutil.ParseEndpointEvent(resp.Body)
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 4096)) //nolint:errcheck
 	resp.Body.Close()
 
@@ -304,57 +304,13 @@ func scoreFingerprint(data map[string]interface{}) (float64, string, string, str
 
 	return score, serverName, serverVer, protocolVer, caps
 }
-
-// parseFirstSSEMessage 从 SSE 流中解析第一个 message event 的 JSON
-func parseFirstSSEMessage(r io.Reader) map[string]interface{} {
-	scanner := bufio.NewScanner(r)
-	var eventType, dataLine string
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "event:") {
-			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-		} else if strings.HasPrefix(line, "data:") {
-			dataLine = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		} else if line == "" && dataLine != "" {
-			// 空行 = event 结束
-			if eventType == "" || eventType == "message" {
-				var data map[string]interface{}
-				if err := json.Unmarshal([]byte(dataLine), &data); err == nil {
-					return data
-				}
-			}
-			// 重置
-			eventType = ""
-			dataLine = ""
-		}
-	}
-	return nil
-}
-
-// parseEndpointEvent 从旧版 SSE 中读取 endpoint event 的 data
-func parseEndpointEvent(r io.Reader) string {
-	scanner := bufio.NewScanner(r)
-	var eventType, dataLine string
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "event:") {
-			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-		} else if strings.HasPrefix(line, "data:") {
-			dataLine = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		} else if line == "" {
-			if eventType == "endpoint" && dataLine != "" {
-				return dataLine
-			}
-			eventType = ""
-			dataLine = ""
-		}
-	}
-	return ""
+// InitializeRequest returns a pre-built MCP initialize request body for the given protocol version.
+// Exported for use by other packages (e.g., analysis).
+func InitializeRequest(version string) []byte {
+	return initializeRequest(version)
 }
 
 func marshalRaw(v interface{}) json.RawMessage {
 	b, _ := json.Marshal(v)
 	return b
 }
-
-

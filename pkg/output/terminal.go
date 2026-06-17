@@ -2,10 +2,17 @@ package output
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/agentscan/agentscan/pkg/models"
 )
+
+// NoColorEnabled reports whether color should be disabled.
+// Respects the NO_COLOR environment variable (https://no-color.org/).
+func NoColorEnabled() bool {
+	return os.Getenv("NO_COLOR") != ""
+}
 
 // ANSI 颜色
 const (

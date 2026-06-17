@@ -10,6 +10,7 @@ import (
 
 	"github.com/agentscan/agentscan/internal/version"
 	"github.com/agentscan/agentscan/pkg/models"
+	"github.com/agentscan/agentscan/pkg/output"
 	"github.com/agentscan/agentscan/pkg/scanner"
 	"github.com/urfave/cli/v2"
 )
@@ -100,7 +101,7 @@ func scanCommand() *cli.Command {
 			cfg.Ports = parsePorts(c.String("ports"))
 			cfg.VerboseRaw = c.Bool("verbose-raw")
 
-			noColor := c.Bool("no-color") || hasArgAnywhere("--no-color") || hasArgAnywhere("-Cn")
+			noColor := c.Bool("no-color") || hasArgAnywhere("--no-color") || hasArgAnywhere("-Cn") || output.NoColorEnabled()
 
 			// 对于在 positional arg 后面的 valued flag，urfave/cli 无法解析，
 			// 优先从 os.Args 直接读取，覆盖 urfave/cli 的默认值
