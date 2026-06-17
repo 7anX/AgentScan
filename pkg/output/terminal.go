@@ -54,9 +54,11 @@ func PrintServer(s *models.MCPServer, noColor bool) {
 	if s.AuthRequired {
 		fmt.Printf("      %s[AUTH-REQUIRED] tools unknown (authentication needed)%s\n", yellow, reset)
 	} else if s.ServerName != "" {
-		fmt.Printf("      server=%q  tools=%d\n", s.ServerName+"/"+s.ServerVersion, s.ToolCount)
+		fmt.Printf("      server=%q  tools=%d  resources=%d  res_templates=%d  prompts=%d\n",
+			s.ServerName+"/"+s.ServerVersion, s.ToolCount, s.ResourceCount, s.ResourceTemplateCount, s.PromptCount)
 	} else {
-		fmt.Printf("      tools=%d\n", s.ToolCount)
+		fmt.Printf("      tools=%d  resources=%d  res_templates=%d  prompts=%d\n",
+			s.ToolCount, s.ResourceCount, s.ResourceTemplateCount, s.PromptCount)
 	}
 
 	// 蜜罐信号
@@ -90,6 +92,10 @@ func PrintSummary(results []*models.MCPServer, noColor bool) {
 	honeypots := 0
 	noAuthCount := 0
 	authRequired := 0
+	totalTools := 0
+	totalResources := 0
+	totalResTemplates := 0
+	totalPrompts := 0
 	for _, r := range results {
 		if r.Honeypot.Suspected {
 			honeypots++
@@ -100,6 +106,10 @@ func PrintSummary(results []*models.MCPServer, noColor bool) {
 		if r.AuthRequired {
 			authRequired++
 		}
+		totalTools += r.ToolCount
+		totalResources += r.ResourceCount
+		totalResTemplates += r.ResourceTemplateCount
+		totalPrompts += r.PromptCount
 	}
 
 	fmt.Printf("\n%s=== AgentScan Summary ===%s\n", bold, reset)
@@ -107,4 +117,8 @@ func PrintSummary(results []*models.MCPServer, noColor bool) {
 	fmt.Printf("  Unauthenticated : %d\n", noAuthCount)
 	fmt.Printf("  Auth-required   : %d\n", authRequired)
 	fmt.Printf("  Honeypots       : %d\n", honeypots)
+	fmt.Printf("Tools exposed     : %d\n", totalTools)
+	fmt.Printf("Resources exposed : %d\n", totalResources)
+	fmt.Printf("Res templates     : %d\n", totalResTemplates)
+	fmt.Printf("Prompts exposed   : %d\n", totalPrompts)
 }
