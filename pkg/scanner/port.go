@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -22,9 +23,13 @@ type PortResult struct {
 }
 
 // ScanPorts 并发 TCP 探测，返回开放端口列表
-func ScanPorts(ctx context.Context, targets []target.Target, concurrency int, timeoutMs int) []PortResult {
+func ScanPorts(ctx context.Context, targets []target.Target, concurrency int, timeoutMs int, verbose bool) []PortResult {
 	sem := semaphore.NewWeighted(int64(concurrency))
 	timeout := time.Duration(timeoutMs) * time.Millisecond
+
+	total := len(targets)
+	fmt.Fprintf(os.Stderr, "[*] Stage 1/3  TCP port scan: probing %d targets (timeout=%dms, threads=%d)\n",
+		total, timeoutMs, concurrency)
 
 	var mu sync.Mutex
 	var results []PortResult
@@ -47,10 +52,20 @@ func ScanPorts(ctx context.Context, targets []target.Target, concurrency int, ti
 				mu.Lock()
 				results = append(results, PortResult{IP: t.IP, Port: t.Port, Hostname: t.Hostname, URLPath: t.URLPath, Proto: t.Proto, Open: true})
 				mu.Unlock()
+
+				if verbose {
+					host := t.IP
+					if t.Hostname != "" {
+						host = t.Hostname
+					}
+					fmt.Fprintf(os.Stderr, "  [OPEN] %s:%d\n", host, t.Port)
+				}
 			}
 		}(t)
 	}
 	wg.Wait()
+
+	fmt.Fprintf(os.Stderr, "[*] Stage 1/3  TCP port scan done: %d/%d open\n", len(results), total)
 	return results
 }
 

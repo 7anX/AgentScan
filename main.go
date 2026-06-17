@@ -90,6 +90,11 @@ func scanCommand() *cli.Command {
 				Usage: "Include raw initialize response in JSON output",
 			},
 			&cli.BoolFlag{
+				Name:    "verbose",
+				Aliases: []string{"v"},
+				Usage:   "Verbose logging: show each open port, current probe target, and response time",
+			},
+			&cli.BoolFlag{
 				Name:  "no-color",
 				Aliases: []string{"Cn"},
 				Usage: "Disable colored output",
@@ -107,6 +112,7 @@ func scanCommand() *cli.Command {
 			cfg.ExcludeHoneypots = c.Bool("exclude-honeypots")
 			cfg.Ports = parsePorts(c.String("ports"))
 			cfg.VerboseRaw = c.Bool("verbose-raw")
+			cfg.Verbose = c.Bool("verbose")
 
 			noColor := c.Bool("no-color") || hasArgAnywhere("--no-color") || hasArgAnywhere("-Cn") || output.NoColorEnabled()
 

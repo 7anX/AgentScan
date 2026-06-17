@@ -22,6 +22,28 @@ type MCPTool struct {
 	InputSchema map[string]interface{} `json:"inputSchema,omitempty"`
 }
 
+// MCPResource 单个资源定义（resources/list）
+type MCPResource struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	MIMEType    string `json:"mimeType,omitempty"`
+}
+
+// MCPPrompt 单个提示词定义（prompts/list）
+type MCPPrompt struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// MCPResourceTemplate 资源模板定义（resources/templates/list）
+type MCPResourceTemplate struct {
+	URITemplate string `json:"uriTemplate"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	MIMEType    string `json:"mimeType,omitempty"`
+}
+
 // MCPCapabilities capabilities 结构
 type MCPCapabilities struct {
 	Tools        interface{} `json:"tools,omitempty"`
@@ -58,6 +80,12 @@ type MCPServer struct {
 	SessionID        string          `json:"session_id,omitempty"`
 	Tools            []MCPTool       `json:"tools,omitempty"`
 	ToolCount        int             `json:"tool_count"`
+	Resources             []MCPResource        `json:"resources,omitempty"`
+	ResourceCount         int                  `json:"resource_count"`
+	ResourceTemplates     []MCPResourceTemplate `json:"resource_templates,omitempty"`
+	ResourceTemplateCount int                  `json:"resource_template_count"`
+	Prompts               []MCPPrompt          `json:"prompts,omitempty"`
+	PromptCount           int                  `json:"prompt_count"`
 	Honeypot         HoneypotResult  `json:"honeypot"`
 	ScanTime         time.Time       `json:"scan_time"`
 	ResponseTimeMs   float64         `json:"response_time_ms"`
@@ -75,6 +103,7 @@ type ScanConfig struct {
 	TimeoutMCPMs     int
 	ExcludeHoneypots bool
 	VerboseRaw       bool
+	Verbose          bool // 详细日志：打印每个开放端口、每个MCP探测过程、耗时
 }
 
 // DefaultConfig 默认配置（数值来自 pkg/config/config.go，统一在那里修改）

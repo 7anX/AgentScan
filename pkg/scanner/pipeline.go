@@ -31,22 +31,34 @@ func NewPipeline(cfg models.ScanConfig, noColor bool, onFound func(*models.MCPSe
 // Run 执行完整扫描，返回所有结果（按风险分从高到低排序）
 func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.MCPServer {
 	// Stage 2: 端口扫描
-	portResults := ScanPorts(ctx, targets, p.cfg.Concurrency, p.cfg.TimeoutConnectMs)
+	portResults := ScanPorts(ctx, targets, p.cfg.Concurrency, p.cfg.TimeoutConnectMs, p.cfg.Verbose)
 	if len(portResults) == 0 {
+		fmt.Fprintf(os.Stderr, "[!] No open ports found, exiting.\n")
 		return nil
 	}
 
 	// Stage 3: HTTP 筛选（并发）
+	fmt.Fprintf(os.Stderr, "[*] Stage 2/3  HTTP filter: checking %d open ports (timeout=%dms)\n",
+		len(portResults), p.cfg.TimeoutHTTPMs)
 	candidates := FilterHTTP(ctx, portResults, p.cfg.TimeoutHTTPMs)
 	if len(candidates) == 0 {
+		fmt.Fprintf(os.Stderr, "[!] No HTTP services found, exiting.\n")
 		return nil
 	}
+	fmt.Fprintf(os.Stderr, "[*] Stage 2/3  HTTP filter done: %d HTTP candidates\n", len(candidates))
 
 	total := int64(len(candidates))
 	var done atomic.Int64
 
-	// 进度打印 goroutine：每秒在 stderr 打印一次进度
+	// 进度打印 goroutine：每秒在 stderr 打印一次进度（含当前目标）
+	type probeStatus struct {
+		mu      sync.Mutex
+		current string
+	}
+	var ps probeStatus
+
 	stopProgress := make(chan struct{})
+	fmt.Fprintf(os.Stderr, "[*] Stage 3/3  MCP probe: %d candidates\n", len(candidates))
 	go func() {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
@@ -54,8 +66,16 @@ func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.M
 			select {
 			case <-ticker.C:
 				n := done.Load()
-				fmt.Fprintf(os.Stderr, "\r[*] Probing MCP: %d/%d candidates (%.0f%%)   ",
-					n, total, float64(n)/float64(total)*100)
+				ps.mu.Lock()
+				cur := ps.current
+				ps.mu.Unlock()
+				if cur != "" {
+					fmt.Fprintf(os.Stderr, "\r[*] Probing MCP: %d/%d (%.0f%%)  -> %-40s",
+						n, total, float64(n)/float64(total)*100, cur)
+				} else {
+					fmt.Fprintf(os.Stderr, "\r[*] Probing MCP: %d/%d (%.0f%%)   ",
+						n, total, float64(n)/float64(total)*100)
+				}
 			case <-stopProgress:
 				fmt.Fprintf(os.Stderr, "\r[*] Probing MCP: %d/%d done%s\n", total, total, "            ")
 				return
@@ -86,7 +106,33 @@ func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.M
 			defer func() { <-sem }()
 			defer done.Add(1)
 
+			// 更新当前探测目标
+			label := fmt.Sprintf("%s:%d", c.IP, c.Port)
+			if c.Hostname != "" {
+				label = fmt.Sprintf("%s:%d", c.Hostname, c.Port)
+			}
+			ps.mu.Lock()
+			ps.current = label
+			ps.mu.Unlock()
+
+			var t0 time.Time
+			if p.cfg.Verbose {
+				t0 = time.Now()
+				fmt.Fprintf(os.Stderr, "\n  [PROBE] %s%s\n", c.BaseURL, c.URLPath)
+			}
+
 			server := p.analyzeCandidate(ctx, c)
+
+			if p.cfg.Verbose {
+				elapsed := time.Since(t0)
+				if server != nil {
+					fmt.Fprintf(os.Stderr, "  [HIT]   %-35s  server=%q  tools=%d  (%dms)\n",
+						label, server.ServerName, server.ToolCount, elapsed.Milliseconds())
+				} else {
+					fmt.Fprintf(os.Stderr, "  [MISS]  %-35s  (%dms)\n", label, elapsed.Milliseconds())
+				}
+			}
+
 			if server == nil {
 				return
 			}
@@ -107,6 +153,8 @@ func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.M
 done:
 	wg.Wait()
 	close(stopProgress)
+
+	fmt.Fprintf(os.Stderr, "[*] Stage 3/3  MCP probe done: %d confirmed MCP servers\n", len(results))
 
 	// 按 FingerprintScore 从高到低排序
 	sort.Slice(results, func(i, j int) bool {
@@ -171,15 +219,31 @@ func (p *Pipeline) analyzeCandidate(ctx context.Context, c HTTPCandidate) *model
 		return server
 	}
 
-	// 工具枚举：SSE legacy 需要重建 session（GET /sse 保持连接）才能枚举工具
+	// 枚举暴露面：tools / resources / resource templates / prompts
 	var tools []models.MCPTool
+	var resources []models.MCPResource
+	var resourceTemplates []models.MCPResourceTemplate
+	var prompts []models.MCPPrompt
+
 	if probe.Transport == models.TransportHTTPSSELegacy {
-		tools = EnumerateToolsSSELegacy(ctx, c.BaseURL, c.Hostname, p.cfg.TimeoutMCPMs)
+		// SSE legacy：单次 session 枚举四类，避免四次独立握手
+		tools, resources, resourceTemplates, prompts = EnumerateAllSSELegacy(ctx, c.BaseURL, probe.Endpoint, c.Hostname, p.cfg.TimeoutMCPMs)
 	} else {
+		// Streamable HTTP：四个独立请求复用同一 session（sessionID 传入）
 		tools = EnumerateTools(ctx, c.BaseURL, probe.Endpoint, probe.MessagePath, probe.SessionID, c.Hostname, p.cfg.TimeoutMCPMs)
+		resources = EnumerateResources(ctx, c.BaseURL, probe.Endpoint, probe.MessagePath, probe.SessionID, c.Hostname, p.cfg.TimeoutMCPMs)
+		resourceTemplates = EnumerateResourceTemplates(ctx, c.BaseURL, probe.Endpoint, probe.MessagePath, probe.SessionID, c.Hostname, p.cfg.TimeoutMCPMs)
+		prompts = EnumeratePrompts(ctx, c.BaseURL, probe.Endpoint, probe.MessagePath, probe.SessionID, c.Hostname, p.cfg.TimeoutMCPMs)
 	}
+
 	server.Tools = tools
 	server.ToolCount = len(tools)
+	server.Resources = resources
+	server.ResourceCount = len(resources)
+	server.ResourceTemplates = resourceTemplates
+	server.ResourceTemplateCount = len(resourceTemplates)
+	server.Prompts = prompts
+	server.PromptCount = len(prompts)
 
 	// 蜜罐检测（传入 hostname 确保 HTTPS SNI 正确）
 	server.Honeypot = analysis.DetectHoneypot(ctx, server, c.Hostname, p.cfg.TimeoutHTTPMs)
@@ -195,11 +259,13 @@ func RunScan(ctx context.Context, rawTargets []string, filePath string,
 	var targets []target.Target
 
 	if filePath != "" {
+		fmt.Fprintf(os.Stderr, "[*] Loading targets from file: %s\n", filePath)
 		ts, err := target.ParseFile(filePath, cfg.Ports)
 		if err != nil {
 			return nil, fmt.Errorf("parse file: %w", err)
 		}
 		targets = append(targets, ts...)
+		fmt.Fprintf(os.Stderr, "[*] Loaded %d targets from file\n", len(ts))
 	}
 
 	for _, raw := range rawTargets {
@@ -231,6 +297,7 @@ func RunScan(ctx context.Context, rawTargets []string, filePath string,
 			deduped = append(deduped, t)
 		}
 	}
+	dupCount := len(targets) - len(deduped)
 	targets = deduped
 
 	// 统计唯一主机数（精确，适用于混合输入：CIDR + host:port + 域名）
@@ -239,8 +306,17 @@ func RunScan(ctx context.Context, rawTargets []string, filePath string,
 		hostSet[t.IP] = struct{}{}
 	}
 	hostCount := len(hostSet)
+
+	if dupCount > 0 {
+		fmt.Fprintf(os.Stderr, "[*] Deduplicated %d duplicate targets\n", dupCount)
+	}
 	fmt.Fprintf(os.Stderr, "[*] AgentScan starting: %d hosts × %d ports = %d probes\n",
 		hostCount, len(cfg.Ports), len(targets))
+	if outputPath != "" {
+		fmt.Fprintf(os.Stderr, "[*] Output file: %s\n", outputPath)
+	}
+	fmt.Fprintf(os.Stderr, "[*] Config: threads=%d  connect-timeout=%dms\n",
+		cfg.Concurrency, cfg.TimeoutConnectMs)
 
 	// 实时打印回调
 	onFound := func(s *models.MCPServer) {
@@ -259,6 +335,9 @@ func RunScan(ctx context.Context, rawTargets []string, filePath string,
 	if format == "json" || outputPath != "" {
 		if err := output.WriteJSON(results, outputPath); err != nil {
 			return results, fmt.Errorf("write JSON: %w", err)
+		}
+		if outputPath != "" {
+			fmt.Fprintf(os.Stderr, "[*] Results written to: %s\n", outputPath)
 		}
 	}
 
