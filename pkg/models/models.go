@@ -101,6 +101,8 @@ type ScanConfig struct {
 	TimeoutConnectMs int
 	TimeoutHTTPMs    int
 	TimeoutMCPMs     int
+	MCPConcurrency   int  // MCP 探测并发数（默认 50，可通过 --mcp-threads 调整）
+	SkipPortScan     bool // 跳过 TCP 端口扫描，适用于输入已知 IP:Port 列表的场景
 	ExcludeHoneypots bool
 	VerboseRaw       bool
 	Verbose          bool // 详细日志：打印每个开放端口、每个MCP探测过程、耗时
@@ -114,5 +116,6 @@ func DefaultConfig() ScanConfig {
 		TimeoutConnectMs: config.DefaultTimeoutConnectMs,
 		TimeoutHTTPMs:    config.DefaultTimeoutConnectMs * 10,
 		TimeoutMCPMs:     config.DefaultTimeoutConnectMs * 20,
+		MCPConcurrency:   50,
 	}
 }

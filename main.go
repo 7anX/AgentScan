@@ -89,6 +89,15 @@ func scanCommand() *cli.Command {
 				Name:  "verbose-raw",
 				Usage: "Include raw initialize response in JSON output",
 			},
+			&cli.IntFlag{
+				Name:  "mcp-threads",
+				Value: 50,
+				Usage: "Max concurrent MCP probe connections (default 50; raise for large batches)",
+			},
+			&cli.BoolFlag{
+				Name:  "skip-port-scan",
+				Usage: "Skip TCP port scan; treat all inputs as open IP:Port (use when feeding masscan/nmap results)",
+			},
 			&cli.BoolFlag{
 				Name:    "verbose",
 				Aliases: []string{"v"},
@@ -113,6 +122,8 @@ func scanCommand() *cli.Command {
 			cfg.Ports = parsePorts(c.String("ports"))
 			cfg.VerboseRaw = c.Bool("verbose-raw")
 			cfg.Verbose = c.Bool("verbose")
+			cfg.MCPConcurrency = c.Int("mcp-threads")
+			cfg.SkipPortScan = c.Bool("skip-port-scan")
 
 			noColor := c.Bool("no-color") || hasArgAnywhere("--no-color") || hasArgAnywhere("-Cn") || output.NoColorEnabled()
 

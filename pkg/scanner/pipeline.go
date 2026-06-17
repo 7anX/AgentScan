@@ -30,8 +30,20 @@ func NewPipeline(cfg models.ScanConfig, noColor bool, onFound func(*models.MCPSe
 
 // Run 执行完整扫描，返回所有结果（按风险分从高到低排序）
 func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.MCPServer {
-	// Stage 2: 端口扫描
-	portResults := ScanPorts(ctx, targets, p.cfg.Concurrency, p.cfg.TimeoutConnectMs, p.cfg.Verbose)
+	// Stage 1: 端口扫描（--skip-port-scan 时跳过，所有输入视为已开放）
+	var portResults []PortResult
+	if p.cfg.SkipPortScan {
+		fmt.Fprintf(os.Stderr, "[*] Stage 1/3  TCP port scan: SKIPPED (--skip-port-scan)\n")
+		portResults = make([]PortResult, 0, len(targets))
+		for _, t := range targets {
+			portResults = append(portResults, PortResult{
+				IP: t.IP, Port: t.Port, Hostname: t.Hostname,
+				URLPath: t.URLPath, Proto: t.Proto, Open: true,
+			})
+		}
+	} else {
+		portResults = ScanPorts(ctx, targets, p.cfg.Concurrency, p.cfg.TimeoutConnectMs, p.cfg.Verbose)
+	}
 	if len(portResults) == 0 {
 		fmt.Fprintf(os.Stderr, "[!] No open ports found, exiting.\n")
 		return nil
@@ -86,7 +98,11 @@ func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.M
 	}()
 
 	// Stage 4+5: MCP 识别 + 深度分析（并发）
-	sem := make(chan struct{}, 50)
+	mcpConc := p.cfg.MCPConcurrency
+	if mcpConc <= 0 {
+		mcpConc = 50
+	}
+	sem := make(chan struct{}, mcpConc)
 	var mu sync.Mutex
 	var results []*models.MCPServer
 	var wg sync.WaitGroup
@@ -310,13 +326,24 @@ func RunScan(ctx context.Context, rawTargets []string, filePath string,
 	if dupCount > 0 {
 		fmt.Fprintf(os.Stderr, "[*] Deduplicated %d duplicate targets\n", dupCount)
 	}
+
+	// 大批量目标警告：超过 5000 时提示推荐参数
+	if len(targets) > 5000 {
+		fmt.Fprintf(os.Stderr, "[!] Large scan: %d probes detected.\n", len(targets))
+		if cfg.TimeoutConnectMs >= 1000 {
+			fmt.Fprintf(os.Stderr, "[!]   Tip (intranet): use --timeout 200 --threads 2000 --mcp-threads 200 for faster results\n")
+		}
+		fmt.Fprintf(os.Stderr, "[!]   Tip (internet): use --skip-port-scan if feeding pre-scanned IP:Port list\n")
+	}
+
 	fmt.Fprintf(os.Stderr, "[*] AgentScan starting: %d hosts × %d ports = %d probes\n",
 		hostCount, len(cfg.Ports), len(targets))
 	if outputPath != "" {
 		fmt.Fprintf(os.Stderr, "[*] Output file: %s\n", outputPath)
 	}
-	fmt.Fprintf(os.Stderr, "[*] Config: threads=%d  connect-timeout=%dms\n",
-		cfg.Concurrency, cfg.TimeoutConnectMs)
+	fmt.Fprintf(os.Stderr, "[*] Config: threads=%d  connect-timeout=%dms  mcp-threads=%d%s\n",
+		cfg.Concurrency, cfg.TimeoutConnectMs, cfg.MCPConcurrency,
+		map[bool]string{true: "  skip-port-scan=true", false: ""}[cfg.SkipPortScan])
 
 	// 实时打印回调
 	onFound := func(s *models.MCPServer) {
