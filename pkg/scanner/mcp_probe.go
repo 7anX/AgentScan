@@ -134,9 +134,9 @@ func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string
 				return
 			}
 
-			if ep == "/sse" {
-				if r := tryHTTPSSELegacy(probeCtx, client, baseURL, timeout); r != nil {
-					r.Endpoint = "/sse"
+			if config.SSELegacyPaths[ep] {
+				if r := tryHTTPSSELegacy(probeCtx, client, baseURL, ep, timeout); r != nil {
+					r.Endpoint = ep
 					resultCh <- result{r, priority}
 				}
 			}
@@ -254,15 +254,16 @@ func tryStreamableHTTP(ctx context.Context, client *http.Client, url, endpoint s
 }
 
 // tryHTTPSSELegacy 旧版 HTTP+SSE（2024-11-05）
-// 正确实现：保持 GET /sse 连接不关闭，并行 POST，从 SSE 流读响应。
+// 正确实现：保持 GET <ssePath> 连接不关闭，并行 POST，从 SSE 流读响应。
 // 这是 SSE legacy 的核心协议要求：session 与连接绑定，断开连接即 session 失效。
-func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL string, timeout time.Duration) *ProbeResult {
+// ssePath 是实际的 SSE GET 路径（如 /sse、/mcp/sse、/mcp-server/sse、/sse/），不再硬编码。
+func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL, ssePath string, timeout time.Duration) *ProbeResult {
 	// 整个 SSE 会话使用独立超时，不依赖外层 ctx
 	sessCtx, sessCancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer sessCancel()
 
 	// Step 1: 建立 SSE 连接并启动监听 goroutine
-	sseReq, err := http.NewRequestWithContext(sessCtx, "GET", baseURL+"/sse", nil)
+	sseReq, err := http.NewRequestWithContext(sessCtx, "GET", baseURL+ssePath, nil)
 	if err != nil {
 		return nil
 	}

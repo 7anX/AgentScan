@@ -21,7 +21,7 @@ var DefaultPorts = []int{
 	80, 443,
 	8000, 8080, 8443,
 	3000, 3001,
-	4000, 5000,
+	8001, 5000,
 	9000,
 }
 
@@ -47,16 +47,25 @@ var MCPEndpoints = []string{
 	"/mcp-server/sse", // 教程组合变体（FastAPI mount 示例）
 
 	// T2 - 版本化 / 尾斜杠
-	"/sse/",         // Python Starlette：不带尾斜杠会 307，带斜杠才命中
-	"/messages/",    // 同上，Python SDK 内部定义为 /messages/
-	"/v1/mcp",       // 对外公共服务带版本号
-	"/api/v1/mcp",   // 版本化 + API 前缀组合
+	"/sse/",       // Python Starlette：不带尾斜杠会 307，带斜杠才命中
+	"/messages/",  // 同上，Python SDK 内部定义为 /messages/
+	"/v1/mcp",     // 对外公共服务带版本号
+	"/api/v1/mcp", // 版本化 + API 前缀组合
 	"/mcp/messages/",
 	"/mcp/v1/messages",
 
 	// T3 - 泛化 JSON-RPC（低频，自研框架）
 	"/jsonrpc",
 	"/rpc",
+}
+
+// SSELegacyPaths 这些路径需要用 HTTP+SSE legacy 协议探测（GET + 保持长连接）。
+// 当 streamable HTTP probe 在这些路径失败时，应额外尝试 legacy SSE 握手。
+var SSELegacyPaths = map[string]bool{
+	"/sse":            true,
+	"/mcp/sse":        true,
+	"/mcp-server/sse": true,
+	"/sse/":           true,
 }
 
 // MCPAuthPaths 已知 MCP 特征路径集合，用于 auth-required 打分。
@@ -74,10 +83,10 @@ var MCPAuthPaths = map[string]bool{
 
 // MCPServerHints Server 响应头中出现这些字符串时，视为高优先级 MCP 候选。
 var MCPServerHints = []string{
-	"uvicorn",  // FastAPI / Python ASGI 默认服务器
+	"uvicorn", // FastAPI / Python ASGI 默认服务器
 	"fastapi",
 	"fastmcp",
-	"express",  // Node.js 最常见框架
+	"express", // Node.js 最常见框架
 	"fastify",
 	"node",
 	"python",
