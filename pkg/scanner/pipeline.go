@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -124,6 +125,7 @@ func (p *Pipeline) analyzeCandidate(ctx context.Context, c HTTPCandidate) *model
 	server := &models.MCPServer{
 		IP:               c.IP,
 		Port:             c.Port,
+		Hostname:         c.Hostname, // Bug2 fix: 传递域名，用于 JSON 输出和 SNI 可见性
 		URL:              c.BaseURL,
 		Endpoint:         probe.Endpoint,
 		Transport:        probe.Transport,
@@ -135,7 +137,7 @@ func (p *Pipeline) analyzeCandidate(ctx context.Context, c HTTPCandidate) *model
 		NoAuth:           probe.NoAuth,
 		AuthRequired:     probe.AuthRequired,
 		ResponseTimeMs:   probe.ResponseTimeMs,
-		TLSEnabled:       len(c.BaseURL) > 5 && c.BaseURL[:5] == "https",
+		TLSEnabled:       strings.HasPrefix(c.BaseURL, "https"), // Bug6 fix: 避免 magic length
 		ScanTime:         time.Now(),
 	}
 
@@ -154,6 +156,12 @@ func (p *Pipeline) analyzeCandidate(ctx context.Context, c HTTPCandidate) *model
 				server.Capabilities.Prompts = probe.Capabilities[k]
 			case "logging":
 				server.Capabilities.Logging = probe.Capabilities[k]
+			case "sampling": // Bug3 fix: 补全缺失的 capabilities
+				server.Capabilities.Sampling = probe.Capabilities[k]
+			case "completions":
+				server.Capabilities.Completions = probe.Capabilities[k]
+			case "experimental":
+				server.Capabilities.Experimental = probe.Capabilities[k]
 			}
 		}
 	}
@@ -163,8 +171,8 @@ func (p *Pipeline) analyzeCandidate(ctx context.Context, c HTTPCandidate) *model
 		return server
 	}
 
-	// 工具枚举
-	tools := EnumerateTools(ctx, c.BaseURL, probe.Endpoint, probe.SessionID, c.Hostname, p.cfg.TimeoutMCPMs)
+	// 工具枚举：SSE legacy 需要 messagePath 才能找到正确的 POST endpoint
+	tools := EnumerateTools(ctx, c.BaseURL, probe.Endpoint, probe.MessagePath, probe.SessionID, c.Hostname, p.cfg.TimeoutMCPMs)
 	server.Tools = tools
 	server.ToolCount = len(tools)
 
@@ -202,12 +210,17 @@ func RunScan(ctx context.Context, rawTargets []string, filePath string,
 		return nil, fmt.Errorf("no valid targets")
 	}
 
-	// 去重：同一 IP:Port 只扫一次（用 struct key 避免 Sprintf 分配）
-	type ipPort struct{ ip string; port int }
-	seen := make(map[ipPort]struct{}, len(targets))
+	// 去重：同一 IP:Port:URLPath 只扫一次。
+	// URLPath 必须参与 key：http://IP:8080/mcp 和 http://IP:8080/api/mcp 是不同扫描目标。
+	type ipPortPath struct {
+		ip      string
+		port    int
+		urlPath string
+	}
+	seen := make(map[ipPortPath]struct{}, len(targets))
 	deduped := make([]target.Target, 0, len(targets)) // 独立 slice，不共享底层数组
 	for _, t := range targets {
-		key := ipPort{t.IP, t.Port}
+		key := ipPortPath{t.IP, t.Port, t.URLPath}
 		if _, exists := seen[key]; !exists {
 			seen[key] = struct{}{}
 			deduped = append(deduped, t)

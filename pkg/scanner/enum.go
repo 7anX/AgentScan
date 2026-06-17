@@ -15,11 +15,18 @@ import (
 
 // EnumerateTools 枚举服务器工具列表（只读，不调用 tools/call）
 // hostname 用于 HTTPS SNI，为空时从 baseURL 推断
-func EnumerateTools(ctx context.Context, baseURL, endpoint, sessionID, hostname string, timeoutMs int) []models.MCPTool {
+// messagePath 仅 SSE legacy transport 有效：GET /sse 返回的 POST endpoint 路径
+// （如 /mcp/v1/basic/message/?session_id=xxx）；非空时优先于 endpoint
+func EnumerateTools(ctx context.Context, baseURL, endpoint, messagePath, sessionID, hostname string, timeoutMs int) []models.MCPTool {
 	timeout := time.Duration(timeoutMs) * time.Millisecond
 	client := buildHTTPClient(hostname, timeout) // 使用支持 SNI 的客户端
 
-	url := baseURL + endpoint
+	// SSE legacy：tools/list 必须 POST 到 session message endpoint，而不是 /sse
+	postEndpoint := endpoint
+	if messagePath != "" {
+		postEndpoint = messagePath
+	}
+	url := baseURL + postEndpoint
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"jsonrpc": "2.0",
 		"id":      2,

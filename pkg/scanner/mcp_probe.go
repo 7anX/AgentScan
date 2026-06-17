@@ -111,6 +111,9 @@ type ProbeResult struct {
 	NoAuth           bool
 	AuthRequired     bool // MCP 服务器存在但需要认证
 	ResponseTimeMs   float64
+	// MessagePath 仅 SSE legacy transport 有效：GET /sse 拿到的 POST endpoint 路径
+	// （如 /mcp/v1/basic/message/?session_id=xxx），用于后续 tools/list 等请求
+	MessagePath string
 }
 
 // ProbeMCP 对单个 base URL 尝试识别 MCP 服务
@@ -359,6 +362,7 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL string, 
 		RawResponse:      marshalRaw(data),
 		NoAuth:           true,
 		ResponseTimeMs:   elapsed,
+		MessagePath:      postPath, // SSE legacy 专用：后续 tools/list 等请求需发到此路径
 	}
 }
 
