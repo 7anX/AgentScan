@@ -130,10 +130,6 @@ func ParseFile(path string, ports []int) ([]Target, error) {
 }
 
 // buildTargets 从 IP 列表 + 端口列表构建目标，保留 hostname 用于 SNI
-func buildTargets(ips []string, ports []int, singlePort int) []Target {
-	return buildTargetsWithHostname(ips, ports, singlePort, "")
-}
-
 func buildTargetsWithHostname(ips []string, ports []int, singlePort int, hostname string) []Target {
 	var targets []Target
 	if singlePort > 0 {

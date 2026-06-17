@@ -153,7 +153,7 @@ func tryStreamableHTTP(ctx context.Context, client *http.Client, url string) *Pr
 
 	// 规范允许两种响应形式，都要处理
 	if strings.Contains(ct, "text/event-stream") {
-		data = parseFirstSSEMessage(resp.Body)
+		data = parseFirstSSEMessage(io.LimitReader(resp.Body, 2<<20)) // 2MB 上限防止恶意服务器无限流
 	} else {
 		limitedBody := io.LimitReader(resp.Body, 1<<20) // 1MB
 		if err := json.NewDecoder(limitedBody).Decode(&data); err != nil {
@@ -206,6 +206,10 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL string, 
 	resp.Body.Close()
 
 	if postPath == "" {
+		return nil
+	}
+	// 验证 postPath 安全性：必须以 / 开头，不含 .. 或 ://
+	if !strings.HasPrefix(postPath, "/") || strings.Contains(postPath, "..") || strings.Contains(postPath, "://") {
 		return nil
 	}
 

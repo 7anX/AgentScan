@@ -102,6 +102,20 @@ func scanCommand() *cli.Command {
 
 			noColor := c.Bool("no-color") || hasArgAnywhere("--no-color") || hasArgAnywhere("-Cn")
 
+			// 对于在 positional arg 后面的 valued flag，urfave/cli 无法解析，
+			// 优先从 os.Args 直接读取，覆盖 urfave/cli 的默认值
+			format := getArgValue("--format")
+			if format == "" {
+				format = c.String("format") // urfave/cli 解析到的（可能是默认值 "terminal"）
+			}
+			outputPath := getArgValue("--output")
+			if outputPath == "" {
+				outputPath = getArgValue("-o")
+			}
+			if outputPath == "" {
+				outputPath = c.String("output")
+			}
+
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
 
@@ -110,8 +124,8 @@ func scanCommand() *cli.Command {
 				rawTargets,
 				c.String("file"),
 				cfg,
-				c.String("output"),
-				c.String("format"),
+				outputPath,
+				format,
 				noColor,
 			)
 			return err
@@ -143,6 +157,19 @@ func hasArgAnywhere(flag string) bool {
 		}
 	}
 	return false
+}
+
+// getArgValue 从 os.Args 任意位置读取 --flag value 的值
+func getArgValue(flag string) string {
+	for i, arg := range os.Args {
+		if arg == flag && i+1 < len(os.Args) {
+			next := os.Args[i+1]
+			if !strings.HasPrefix(next, "-") {
+				return next
+			}
+		}
+	}
+	return ""
 }
 
 func filterNonFlags(args []string) []string {
