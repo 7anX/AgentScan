@@ -334,6 +334,18 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL string, 
 	defer resp2.Body.Close()
 	elapsed := float64(time.Since(start).Milliseconds())
 
+	// 202 Accepted = 异步 SSE 模式：响应通过 SSE 流推送，POST 本身不携带 initialize 结果。
+	// endpoint event 已是强 MCP 特征，直接以 0.4 分返回，不尝试解析 POST body。
+	if resp2.StatusCode == 202 {
+		return &ProbeResult{
+			Transport:        models.TransportHTTPSSELegacy,
+			FingerprintScore: 0.4,
+			NoAuth:           true,
+			ResponseTimeMs:   elapsed,
+			MessagePath:      postPath,
+		}
+	}
+
 	if resp2.StatusCode != 200 {
 		return nil
 	}
@@ -432,11 +444,18 @@ func marshalRaw(v interface{}) json.RawMessage {
 //   - 响应体含 "error" 字段：错误响应信号 +1
 //
 // 总分 ≥ 3 才认为是 auth-required MCP（防止单一信号误报）
-// 注意：406 Not Acceptable 是内容协商失败（Accept header 不匹配），不是认证错误，直接排除。
+// 排除的状态码：
+//   - 406 Not Acceptable：内容协商失败，不是认证错误
+//   - 404 Not Found：资源不存在（SSE legacy 无 session 的 /messages 返回 404，
+//                   是正常业务逻辑，不是认证拒绝）
 func isMCPAuthRequired(resp *http.Response, endpoint string) bool {
-	// 406 = 内容协商失败，服务器可能只接受 text/event-stream。
-	// 这不是认证错误，调用方应该换参数重试，不应标记为 auth-required。
-	if resp.StatusCode == 406 {
+	switch resp.StatusCode {
+	case 406:
+		// 内容协商失败，调用方应换参数重试
+		return false
+	case 404:
+		// 资源不存在（SSE legacy 无有效 session 时 /messages 返回 404）
+		// 不是认证错误，排除
 		return false
 	}
 
