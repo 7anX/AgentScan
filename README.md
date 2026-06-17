@@ -1,3 +1,5 @@
+English | [中文](README_CN.md)
+
 # AgentScan
 
 **MCP exposure surface scanner** — discovers unauthenticated Model Context Protocol servers on the network, enumerates their tools, and detects honeypots.
