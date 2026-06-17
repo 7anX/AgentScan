@@ -160,6 +160,67 @@ agentscan scan -t 192.168.1.0/24 --format json -o out.json
 
 ---
 
+## 最佳实践
+
+AgentScan 是 **MCP 攻击面发现工具**，不是通用端口扫描器。根据目标规模选择合适的工作方式。
+
+### 小范围（单个主机 / 小子网）
+
+直接用 AgentScan，内置 TCP 扫描已经够用：
+
+```bash
+./agentscan scan 192.168.1.0/24
+./agentscan scan api.example.com
+```
+
+### 大范围（互联网 / 大 CIDR）
+
+AgentScan 与专用端口扫描器配合使用。让 masscan/nmap 承担大规模 TCP 扫描，再把开放端口喂给 AgentScan 做 MCP 识别：
+
+```bash
+# 第一步：masscan 快速 TCP 扫描，发现开放端口
+masscan 10.0.0.0/8 -p 80,443,8000,8080,8443,3000,3001,4000,5000,9000 \
+  --rate 100000 -oG open_ports.txt
+
+# 第二步：转换 masscan 输出为 host:port 列表
+grep "Host:" open_ports.txt | awk '{print $2":"$5}' | sed 's|/open||' > targets.txt
+
+# 第三步：AgentScan 做 MCP 指纹识别、工具枚举、蜜罐检测
+./agentscan scan -f targets.txt --format json -o results.json
+```
+
+> 这种分工是有意为之：masscan/nmap 为原始 TCP 吞吐量优化；AgentScan 为 MCP 协议层分析优化。两者互补，而非替代。
+
+### 通过互联网测绘平台被动发现
+
+用 Shodan/FOFA/ZoomEye 查询语句获取预过滤的候选列表，再用 AgentScan 验证：
+
+```bash
+# 从 Shodan/FOFA 导出 IP:port 列表，然后：
+./agentscan scan -f shodan_results.txt --format json -o verified.json
+```
+
+### 已知目标的定向探测
+
+当你已经知道某台主机运行 MCP（例如来自 Shodan 结果），可以直接跳过端口扫描：
+
+```bash
+# 直接指定 URL — 跳过端口扫描和 HTTP 筛选，直接进入 MCP 探测
+./agentscan scan https://api.example.com/mcp
+./agentscan scan https://api.example.com:8443/v1/mcp
+```
+
+### CI / 自动化流水线
+
+```bash
+# 退出码 0 = 扫描完成（不管有没有发现）
+# 用 jq 解析结果
+./agentscan scan 10.0.0.0/24 --format json 2>/dev/null \
+  | jq '.results[] | select(.no_auth == true) | {ip, port, server_name, tool_count}'
+```
+
+---
+
 ## 输出
 
 ### 终端（默认）

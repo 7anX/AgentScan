@@ -160,6 +160,67 @@ agentscan scan -t 192.168.1.0/24 --format json -o out.json
 
 ---
 
+## Best Practices
+
+AgentScan is a **MCP exposure surface scanner**, not a general-purpose port scanner. The right workflow depends on your target scope.
+
+### Small scope (single host / small subnet)
+
+Use AgentScan directly — the built-in TCP scan is sufficient:
+
+```bash
+./agentscan scan 192.168.1.0/24
+./agentscan scan api.example.com
+```
+
+### Large scope (wide internet / large CIDR)
+
+Pair AgentScan with a fast port scanner. Let masscan/nmap handle TCP at scale; feed the open ports to AgentScan for MCP identification:
+
+```bash
+# Step 1: fast TCP scan — find open ports at scale
+masscan 10.0.0.0/8 -p 80,443,8000,8080,8443,3000,3001,4000,5000,9000 \
+  --rate 100000 -oG open_ports.txt
+
+# Step 2: convert masscan output to host:port list
+grep "Host:" open_ports.txt | awk '{print $2":"$5}' | sed 's|/open||' > targets.txt
+
+# Step 3: AgentScan does MCP fingerprinting, tool enum, honeypot detection
+./agentscan scan -f targets.txt --format json -o results.json
+```
+
+> This division of labor is intentional: masscan/nmap are optimized for raw TCP throughput; AgentScan is optimized for MCP-layer analysis. They complement, not replace, each other.
+
+### Passive discovery via internet mapping platforms
+
+Use platform queries (Shodan/FOFA/ZoomEye) to get a pre-filtered candidate list, then verify with AgentScan:
+
+```bash
+# Export results from Shodan/FOFA as IP:port list, then:
+./agentscan scan -f shodan_results.txt --format json -o verified.json
+```
+
+### Focused research on a known host
+
+When you already know a host runs MCP (e.g. from a Shodan result), skip port scanning entirely:
+
+```bash
+# Direct URL — no port scan, no HTTP filter, straight to MCP probe
+./agentscan scan https://api.example.com/mcp
+./agentscan scan https://api.example.com:8443/v1/mcp
+```
+
+### CI / automated pipeline
+
+```bash
+# Exit code 0 = scan completed (regardless of findings)
+# Parse results with jq
+./agentscan scan 10.0.0.0/24 --format json 2>/dev/null \
+  | jq '.results[] | select(.no_auth == true) | {ip, port, server_name, tool_count}'
+```
+
+---
+
 ## Output
 
 ### Terminal (default)
