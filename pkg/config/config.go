@@ -17,23 +17,33 @@ const (
 
 // DefaultPorts 默认扫描端口列表（按命中率降序排列）。
 //
-// 调研依据（2025-06）：
-//   - 8000: FastMCP / 官方 Python SDK 默认；绝大多数 Python MCP 服务器
-//   - 3000: MCPHub / Firebase tools / MCP-Nest 默认
-//   - 443/80: 生产环境反向代理
-//   - 8080: FastMCP dev_server 默认；Skyvern UI
-//   - 7860: Gradio MCP（HuggingFace 生态，数千 Space）+ Langflow 默认 ← 新增
-//   - 3030: MCP-Nest（NestJS MCP 框架）所有示例默认端口 ← 新增
-//   - 3001: Node.js 次级端口；ohcnetwork MCP
-//   - 8443: HTTPS 非标准端口
-//   - 5000: Python web 服务常用端口
+// 数据来源（2025-06 实测）：
+//   Quake  app:"Model Context Protocol"（全球）: 8000, 8001, 443, 3000, 80
+//   Quake  app:"Model Context Protocol" 中国:    8001, 8000, 3000, 11003, 8080
+//   FOFA   header="MCP-Protocol-Version||MCP-Session-Id": 443, 80, 3000, 3001, 8080
+//
+//   - 8000:  全球 #1；Python SDK / FastMCP 默认
+//   - 8001:  中国 #1 / 全球 #2；大量国内部署用此端口（之前误删，现加回）
+//   - 443:   全球 #3 / FOFA #1；生产反向代理
+//   - 3000:  全球 #4 / 中国 #3；MCPHub / Firebase / MCP-Nest
+//   - 80:    全球 #5 / FOFA #2；生产反向代理
+//   - 8080:  中国 #5 / FOFA #5；FastMCP dev_server
+//   - 3001:  FOFA #4；Node.js 次级端口
+//   - 11003: 中国 #4；国内实测发现，来源待定
+//   - 7860:  Gradio MCP / Langflow（HuggingFace 生态）
+//   - 3030:  MCP-Nest（NestJS 框架）默认
+//   - 8443:  HTTPS 非标准端口
+//   - 5000:  Python web 常用端口
 //   - 4000/9000: 无 MCP 特定证据，保留但优先级最低
 var DefaultPorts = []int{
-	// Tier 1 — MCP 高频端口
-	8000, 3000, 443, 80, 8080,
-	// Tier 2 — 框架默认 / 次高频
-	7860, 3030, 3001, 8443, 5000,
-	// Tier 3 — 低频保留
+	// Tier 1 — 实测高频（Quake / FOFA 榜单前列）
+	8000, 8001, 443, 3000, 80, 8080, 3001,
+	// Tier 2 — 实测发现 + 框架默认
+	11003, 7860, 3030, 8443, 5000,
+	// Tier 3 — AI/云原生生态补充
+	8888, // Jupyter Notebook / Gradio 备用（AI 工具链高频）
+	8787, // Cloudflare Workers wrangler dev 本地默认
+	5001, // Flask macOS 替代（AirPlay 占用 5000）
 	4000, 9000,
 }
 
@@ -117,17 +127,28 @@ var MCPAuthPaths = map[string]bool{
 
 // MCPServerHints Server 响应头中出现这些字符串时，视为高优先级 MCP 候选。
 var MCPServerHints = []string{
-	"uvicorn",  // FastAPI / Python ASGI 默认服务器
+	// Python 生态
+	"uvicorn",    // FastAPI / Python ASGI 默认服务器
 	"fastapi",
 	"fastmcp",
-	"express",  // Node.js 最常见框架
+	"gunicorn",   // Python WSGI 生产服务器
+	"starlette",  // FastAPI 底层框架（少数场景暴露）
+	"hypercorn",  // Python ASGI 替代服务器（Quart 默认）
+	"werkzeug",   // Flask 开发服务器
+	"python",
+	// Node.js / JS Runtime 生态
+	"express",    // Node.js 最常见框架
 	"fastify",
 	"node",
-	"python",
-	"gunicorn", // Python WSGI 生产服务器
-	"gradio",   // Gradio MCP（HuggingFace 生态）
-	"langflow", // Langflow MCP
-	"nestjs",   // MCP-Nest
+	"hono",       // Cloudflare Workers / Deno 生态流行框架
+	"deno",       // Deno runtime
+	"bun",        // Bun runtime
+	"nestjs",     // MCP-Nest
+	// 专有 MCP 生态
+	"gradio",     // Gradio MCP（HuggingFace 生态）
+	"langflow",   // Langflow MCP
+	// 其他语言
+	"kestrel",    // ASP.NET Core 默认服务器（C# MCP SDK）
 }
 
 // ── HTTPS 端口推断规则 ────────────────────────────────────────────────────────
