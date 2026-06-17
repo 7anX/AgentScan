@@ -133,6 +133,7 @@ func (p *Pipeline) analyzeCandidate(ctx context.Context, c HTTPCandidate) *model
 		ServerVersion:    probe.ServerVersion,
 		ProtocolVersion:  probe.ProtocolVersion,
 		NoAuth:           probe.NoAuth,
+		AuthRequired:     probe.AuthRequired,
 		ResponseTimeMs:   probe.ResponseTimeMs,
 		TLSEnabled:       len(c.BaseURL) > 5 && c.BaseURL[:5] == "https",
 		ScanTime:         time.Now(),
@@ -155,6 +156,11 @@ func (p *Pipeline) analyzeCandidate(ctx context.Context, c HTTPCandidate) *model
 				server.Capabilities.Logging = probe.Capabilities[k]
 			}
 		}
+	}
+
+	// auth-required：无法枚举工具或做蜜罐检测，直接返回
+	if probe.AuthRequired {
+		return server
 	}
 
 	// 工具枚举

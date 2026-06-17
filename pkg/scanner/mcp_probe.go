@@ -69,17 +69,18 @@ func initializeRequest(version string) []byte {
 
 // ProbeResult MCP 探测结果
 type ProbeResult struct {
-	Endpoint        string
-	Transport       models.Transport
+	Endpoint         string
+	Transport        models.Transport
 	FingerprintScore float64
-	SessionID       string
-	ProtocolVersion string
-	ServerName      string
-	ServerVersion   string
-	Capabilities    map[string]interface{}
-	RawResponse     json.RawMessage
-	NoAuth          bool
-	ResponseTimeMs  float64
+	SessionID        string
+	ProtocolVersion  string
+	ServerName       string
+	ServerVersion    string
+	Capabilities     map[string]interface{}
+	RawResponse      json.RawMessage
+	NoAuth           bool
+	AuthRequired     bool // MCP 服务器存在但需要认证
+	ResponseTimeMs   float64
 }
 
 // ProbeMCP 对单个 base URL 尝试识别 MCP 服务
@@ -109,7 +110,7 @@ func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string
 	for _, endpoint := range endpoints {
 		url := baseURL + endpoint
 
-		if r := tryStreamableHTTP(ctx, client, url); r != nil {
+		if r := tryStreamableHTTP(ctx, client, url, endpoint); r != nil {
 			r.Endpoint = endpoint
 			return r
 		}
@@ -125,7 +126,8 @@ func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string
 }
 
 // tryStreamableHTTP POST /mcp 尝试 Streamable HTTP（2025-03-26+）
-func tryStreamableHTTP(ctx context.Context, client *http.Client, url string) *ProbeResult {
+// endpoint 参数用于辅助 auth-required 判断（/mcp、/sse 等 MCP 特征路径名）
+func tryStreamableHTTP(ctx context.Context, client *http.Client, url, endpoint string) *ProbeResult {
 	body := initializeRequest("2025-06-18")
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
@@ -145,6 +147,19 @@ func tryStreamableHTTP(ctx context.Context, client *http.Client, url string) *Pr
 	elapsed := float64(time.Since(start).Milliseconds())
 
 	if resp.StatusCode != 200 {
+		// 检测是否为需要认证的 MCP 服务器（三个条件同时满足才报告，避免误报）：
+		// 1. 状态码明确表示认证失败（401/403），或 400 且带 WWW-Authenticate
+		// 2. 响应体包含 "jsonrpc" 字段（JSON-RPC 协议特征）
+		// 3. 响应体包含 "error" 字段，或响应头有 MCP-Session-Id / MCP-Protocol-Version
+		if isMCPAuthRequired(resp, endpoint) {
+			return &ProbeResult{
+				Transport:        models.TransportStreamableHTTP,
+				FingerprintScore: 0.5, // 固定中间分：确认是 MCP，但无法完整指纹
+				NoAuth:           false,
+				AuthRequired:     true,
+				ResponseTimeMs:   elapsed,
+			}
+		}
 		return nil
 	}
 
@@ -313,4 +328,57 @@ func InitializeRequest(version string) []byte {
 func marshalRaw(v interface{}) json.RawMessage {
 	b, _ := json.Marshal(v)
 	return b
+}
+
+// isMCPAuthRequired 判断 4xx 响应是否来自需要认证的 MCP 服务器。
+// 综合多个信号打分，避免普通 Web 应用误报：
+//   - MCP 特有响应头（MCP-Protocol-Version / MCP-Session-Id）：强信号 +2
+//   - 状态码 401/403，或 400+WWW-Authenticate：认证拒绝信号 +1
+//   - 端点路径是 /mcp 或 /sse 等 MCP 特征路径：路径信号 +1
+//   - 响应体 Content-Type 是 application/json：JSON API 信号 +1
+//   - 响应体含 "jsonrpc" 字段：JSON-RPC 信号 +2
+//   - 响应体含 "error" 字段：错误响应信号 +1
+//
+// 总分 ≥ 3 才认为是 auth-required MCP（防止单一信号误报）
+func isMCPAuthRequired(resp *http.Response, endpoint string) bool {
+	score := 0
+
+	// MCP 特有 header（最强信号）
+	if resp.Header.Get("MCP-Protocol-Version") != "" || resp.Header.Get("MCP-Session-Id") != "" {
+		score += 2
+	}
+
+	// 状态码信号
+	code := resp.StatusCode
+	if code == 401 || code == 403 || (code == 400 && resp.Header.Get("WWW-Authenticate") != "") {
+		score += 1
+	}
+
+	// 端点路径信号：/mcp、/sse、/messages、/api/mcp、/v1/mcp 是 MCP 特征路径
+	mcpPaths := map[string]bool{
+		"/mcp": true, "/sse": true, "/messages": true,
+		"/api/mcp": true, "/v1/mcp": true,
+	}
+	if mcpPaths[endpoint] {
+		score += 1
+	}
+
+	// 响应体信号
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err == nil && len(body) > 0 {
+		isJSONContentType := strings.Contains(
+			strings.ToLower(resp.Header.Get("Content-Type")), "application/json")
+		if isJSONContentType {
+			score += 1
+		}
+		bodyStr := string(body)
+		if strings.Contains(bodyStr, `"jsonrpc"`) {
+			score += 2
+		}
+		if strings.Contains(bodyStr, `"error"`) {
+			score += 1
+		}
+	}
+
+	return score >= 3
 }

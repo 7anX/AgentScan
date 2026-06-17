@@ -25,14 +25,20 @@ const (
 
 // PrintServer 实时打印单个 MCP 服务器发现结果
 func PrintServer(s *models.MCPServer, noColor bool) {
-	bold, reset := "", ""
+	bold, reset, yellow := "", "", ""
 	if !noColor {
 		bold = colorGreen + colorBold
 		reset = colorReset
+		yellow = colorYellow
 	}
 
 	auth := "no-auth"
-	if !s.NoAuth {
+	if s.AuthRequired {
+		auth = "auth-required"
+		if !noColor {
+			bold = colorYellow + colorBold // auth-required 用黄色区分
+		}
+	} else if !s.NoAuth {
 		auth = "auth"
 	}
 
@@ -45,7 +51,9 @@ func PrintServer(s *models.MCPServer, noColor bool) {
 		auth,
 	)
 
-	if s.ServerName != "" {
+	if s.AuthRequired {
+		fmt.Printf("      %s[AUTH-REQUIRED] tools unknown (authentication needed)%s\n", yellow, reset)
+	} else if s.ServerName != "" {
 		fmt.Printf("      server=%q  tools=%d\n", s.ServerName+"/"+s.ServerVersion, s.ToolCount)
 	} else {
 		fmt.Printf("      tools=%d\n", s.ToolCount)
@@ -81,6 +89,7 @@ func PrintSummary(results []*models.MCPServer, noColor bool) {
 	total := len(results)
 	honeypots := 0
 	noAuthCount := 0
+	authRequired := 0
 	for _, r := range results {
 		if r.Honeypot.Suspected {
 			honeypots++
@@ -88,10 +97,14 @@ func PrintSummary(results []*models.MCPServer, noColor bool) {
 		if r.NoAuth {
 			noAuthCount++
 		}
+		if r.AuthRequired {
+			authRequired++
+		}
 	}
 
 	fmt.Printf("\n%s=== AgentScan Summary ===%s\n", bold, reset)
 	fmt.Printf("MCP servers found : %d\n", total)
 	fmt.Printf("  Unauthenticated : %d\n", noAuthCount)
+	fmt.Printf("  Auth-required   : %d\n", authRequired)
 	fmt.Printf("  Honeypots       : %d\n", honeypots)
 }

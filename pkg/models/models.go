@@ -40,27 +40,28 @@ type HoneypotResult struct {
 
 // MCPServer 扫描结果（只保留存活信息，不做风险评估）
 type MCPServer struct {
-	IP              string          `json:"ip"`
-	Port            int             `json:"port"`
-	Hostname        string          `json:"hostname,omitempty"`
-	URL             string          `json:"url"`
-	Endpoint        string          `json:"endpoint"`
-	Transport       Transport       `json:"transport"`
-	FingerprintScore float64        `json:"fingerprint_score"`
-	NoAuth          bool            `json:"no_auth"`
-	ServerName      string          `json:"server_name,omitempty"`
-	ServerVersion   string          `json:"server_version,omitempty"`
-	ProtocolVersion string          `json:"protocol_version,omitempty"`
-	Capabilities    MCPCapabilities `json:"capabilities"`
-	SessionID       string          `json:"session_id,omitempty"`
-	Tools           []MCPTool       `json:"tools,omitempty"`
-	ToolCount       int             `json:"tool_count"`
-	Honeypot        HoneypotResult  `json:"honeypot"`
-	ScanTime        time.Time       `json:"scan_time"`
-	ResponseTimeMs  float64         `json:"response_time_ms"`
-	TLSEnabled      bool            `json:"tls_enabled"`
-	RawInitResponse json.RawMessage `json:"raw_init_response,omitempty"`
-	Error           string          `json:"error,omitempty"`
+	IP               string          `json:"ip"`
+	Port             int             `json:"port"`
+	Hostname         string          `json:"hostname,omitempty"`
+	URL              string          `json:"url"`
+	Endpoint         string          `json:"endpoint"`
+	Transport        Transport       `json:"transport"`
+	FingerprintScore float64         `json:"fingerprint_score"`
+	NoAuth           bool            `json:"no_auth"`
+	AuthRequired     bool            `json:"auth_required,omitempty"`
+	ServerName       string          `json:"server_name,omitempty"`
+	ServerVersion    string          `json:"server_version,omitempty"`
+	ProtocolVersion  string          `json:"protocol_version,omitempty"`
+	Capabilities     MCPCapabilities `json:"capabilities"`
+	SessionID        string          `json:"session_id,omitempty"`
+	Tools            []MCPTool       `json:"tools,omitempty"`
+	ToolCount        int             `json:"tool_count"`
+	Honeypot         HoneypotResult  `json:"honeypot"`
+	ScanTime         time.Time       `json:"scan_time"`
+	ResponseTimeMs   float64         `json:"response_time_ms"`
+	TLSEnabled       bool            `json:"tls_enabled"`
+	RawInitResponse  json.RawMessage `json:"raw_init_response,omitempty"`
+	Error            string          `json:"error,omitempty"`
 }
 
 // ScanConfig 扫描配置
