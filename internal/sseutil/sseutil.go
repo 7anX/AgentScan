@@ -11,25 +11,38 @@ import (
 // ParseFirstMessage reads an SSE stream and returns the JSON data of the first
 // "message" event (or any unnamed event). Returns nil if no valid JSON event
 // is found before EOF or read error.
+//
+// Handles:
+//   - Large payloads: scanner buffer expanded to 512KB (same as ParseEndpointAndListen)
+//   - Multi-line data: consecutive "data:" lines are concatenated per SSE spec
 func ParseFirstMessage(r io.Reader) map[string]interface{} {
 	scanner := bufio.NewScanner(r)
-	var eventType, dataLine string
+	// Expand buffer to 512KB to match ParseEndpointAndListen; prevents token too long
+	// errors on servers that send large tool schemas in a single SSE event.
+	scanner.Buffer(make([]byte, 512*1024), 512*1024)
+
+	var eventType string
+	var dataLines []string // accumulate multi-line data: fields
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		switch {
 		case strings.HasPrefix(line, "event:"):
 			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 		case strings.HasPrefix(line, "data:"):
-			dataLine = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		case line == "" && dataLine != "":
-			// blank line = end of event
-			if eventType == "" || eventType == "message" {
+			// SSE spec: multiple data: lines are joined with "\n"
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		case line == "":
+			// blank line = dispatch event
+			if len(dataLines) > 0 && (eventType == "" || eventType == "message") {
+				payload := strings.Join(dataLines, "\n")
 				var d map[string]interface{}
-				if json.Unmarshal([]byte(dataLine), &d) == nil {
+				if json.Unmarshal([]byte(payload), &d) == nil {
 					return d
 				}
 			}
-			eventType, dataLine = "", ""
+			eventType = ""
+			dataLines = dataLines[:0]
 		}
 	}
 	return nil
@@ -71,7 +84,9 @@ func ParseEndpointAndListen(r io.Reader, postPathCh chan<- string, msgCh chan<- 
 	scanner := bufio.NewScanner(r)
 	// bufio.Scanner default buffer is 64KB; expand for large tool schemas
 	scanner.Buffer(make([]byte, 512*1024), 512*1024)
-	var eventType, dataLine string
+
+	var eventType string
+	var dataLines []string // multi-line data: accumulator
 	endpointSent := false
 
 	for scanner.Scan() {
@@ -80,38 +95,40 @@ func ParseEndpointAndListen(r io.Reader, postPathCh chan<- string, msgCh chan<- 
 		case strings.HasPrefix(line, "event:"):
 			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 		case strings.HasPrefix(line, "data:"):
-			dataLine = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 		case line == "":
-			if dataLine == "" {
+			if len(dataLines) == 0 {
 				eventType = ""
 				continue
 			}
+			payload := strings.Join(dataLines, "\n")
 			switch eventType {
 			case "endpoint":
-				if !endpointSent && dataLine != "" {
+				if !endpointSent && payload != "" {
 					select {
-					case postPathCh <- dataLine:
+					case postPathCh <- payload:
 						endpointSent = true
 					default:
 					}
 				}
 			case "message", "":
 				var d map[string]interface{}
-				if json.Unmarshal([]byte(dataLine), &d) == nil {
+				if json.Unmarshal([]byte(payload), &d) == nil {
 					select {
 					case msgCh <- d:
 					default:
 					}
 				}
 			}
-			eventType, dataLine = "", ""
+			eventType = ""
+			dataLines = dataLines[:0]
 		}
 	}
 
 	// EOF without trailing blank line
-	if !endpointSent && eventType == "endpoint" && dataLine != "" {
+	if !endpointSent && eventType == "endpoint" && len(dataLines) > 0 {
 		select {
-		case postPathCh <- dataLine:
+		case postPathCh <- strings.Join(dataLines, "\n"):
 		default:
 		}
 	}
