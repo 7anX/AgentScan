@@ -1,4 +1,4 @@
-package scanner
+﻿package scanner
 
 import (
 	"bytes"
@@ -285,86 +285,99 @@ func tryStreamableHTTP(ctx context.Context, client *http.Client, url, endpoint s
 }
 
 // tryHTTPSSELegacy 旧版 HTTP+SSE（2024-11-05）
+// 正确实现：保持 GET /sse 连接不关闭，并行 POST，从 SSE 流读响应。
+// 这是 SSE legacy 的核心协议要求：session 与连接绑定，断开连接即 session 失效。
 func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL string, timeout time.Duration) *ProbeResult {
-	// Step 1: GET /sse，独立超时 3s，不依赖外层 ctx（并行探测时外层 ctx 可能已接近耗尽）
-	sseCtx, sseCancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer sseCancel()
+	// 整个 SSE 会话使用独立超时，不依赖外层 ctx
+	sessCtx, sessCancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer sessCancel()
 
-	req, err := http.NewRequestWithContext(sseCtx, "GET", baseURL+"/sse", nil)
+	// Step 1: 建立 SSE 连接并启动监听 goroutine
+	sseReq, err := http.NewRequestWithContext(sessCtx, "GET", baseURL+"/sse", nil)
 	if err != nil {
 		return nil
 	}
-	req.Header.Set("Accept", "text/event-stream")
+	sseReq.Header.Set("Accept", "text/event-stream")
 
-	resp, err := client.Do(req)
+	sseResp, err := client.Do(sseReq)
 	if err != nil {
 		return nil
 	}
-	// 读取 endpoint event 后立即关闭。
-	// 不需要排尽剩余字节：client 设了 DisableKeepAlives=true，Close() 直接断开 TCP，
-	// 不会影响连接复用。对 chunked 长连接 SSE，跳过 io.Copy 可节省 ~3s 等待。
-	postPath := sseutil.ParseEndpointEvent(resp.Body)
-	resp.Body.Close()
+	defer sseResp.Body.Close()
+
+	if sseResp.StatusCode != 200 {
+		return nil
+	}
+
+	// 启动 SSE 监听 goroutine
+	postPathCh := make(chan string, 1)
+	msgCh := make(chan map[string]interface{}, 8)
+	go sseutil.ParseEndpointAndListen(sseResp.Body, postPathCh, msgCh)
+
+	// Step 2: 等待 endpoint event，拿到 postPath
+	var postPath string
+	select {
+	case postPath = <-postPathCh:
+	case <-sessCtx.Done():
+		return nil
+	}
 
 	if postPath == "" {
 		return nil
 	}
-	// 验证 postPath 安全性：必须以 / 开头，不含 .. 或 ://
 	if !strings.HasPrefix(postPath, "/") || strings.Contains(postPath, "..") || strings.Contains(postPath, "://") {
 		return nil
 	}
 
-	// Step 2: POST 到 endpoint，独立 5s 超时
-	postCtx, postCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer postCancel()
-
+	// Step 3: POST initialize（在 sessCtx 内，session 仍然有效）
 	postURL := baseURL + postPath
 	body := initializeRequest("2024-11-05")
-
-	req2, err := http.NewRequestWithContext(postCtx, "POST", postURL, bytes.NewReader(body))
+	postReq, err := http.NewRequestWithContext(sessCtx, "POST", postURL, bytes.NewReader(body))
 	if err != nil {
 		return nil
 	}
-	req2.Header.Set("Content-Type", "application/json")
+	postReq.Header.Set("Content-Type", "application/json")
 
 	start := time.Now()
-	resp2, err := client.Do(req2)
+	postResp, err := client.Do(postReq)
 	if err != nil {
 		return nil
 	}
-	defer resp2.Body.Close()
+	defer postResp.Body.Close()
 	elapsed := float64(time.Since(start).Milliseconds())
 
-	// 202 Accepted = 异步 SSE 模式：响应通过 SSE 流推送，POST 本身不携带 initialize 结果。
-	// endpoint event 已是强 MCP 特征，直接以 0.4 分返回，不尝试解析 POST body。
-	if resp2.StatusCode == 202 {
-		return &ProbeResult{
-			Transport:        models.TransportHTTPSSELegacy,
-			FingerprintScore: 0.4,
-			NoAuth:           true,
-			ResponseTimeMs:   elapsed,
-			MessagePath:      postPath,
+	switch postResp.StatusCode {
+	case 200:
+		var data map[string]interface{}
+		if err := json.NewDecoder(io.LimitReader(postResp.Body, 1<<20)).Decode(&data); err != nil {
+			return sseProbeResult(postPath, elapsed, 0.4, "", "", "", nil, nil)
 		}
-	}
+		score, serverName, serverVer, protocolVer, caps := scoreFingerprint(data)
+		if score < 0.35 {
+			score = 0.4
+		}
+		return sseProbeResult(postPath, elapsed, score, serverName, serverVer, protocolVer, caps, marshalRaw(data))
 
-	if resp2.StatusCode != 200 {
+	case 202:
+		// 异步响应：从 SSE 流等待 message event
+		select {
+		case data := <-msgCh:
+			score, serverName, serverVer, protocolVer, caps := scoreFingerprint(data)
+			if score < 0.35 {
+				score = 0.4
+			}
+			return sseProbeResult(postPath, elapsed, score, serverName, serverVer, protocolVer, caps, marshalRaw(data))
+		case <-sessCtx.Done():
+			return sseProbeResult(postPath, elapsed, 0.4, "", "", "", nil, nil)
+		}
+
+	default:
 		return nil
 	}
+}
 
-	var data map[string]interface{}
-	limitedBody := io.LimitReader(resp2.Body, 1<<20)
-	if err := json.NewDecoder(limitedBody).Decode(&data); err != nil {
-		return nil
-	}
-
-	score, serverName, serverVer, protocolVer, caps := scoreFingerprint(data)
-	// result:null 或低分：这个服务器 initialize 响应不标准（常见于 Kong 等网关代理）。
-	// 但 Step 1 能拿到合法 endpoint event 本身就是强 MCP 特征（非 MCP 服务不会返回 SSE endpoint event）。
-	// 降级处理：最低给 0.4 分，确保能通过 pipeline 的 0.35 阈值。
-	if score < 0.35 {
-		score = 0.4
-	}
-
+// sseProbeResult 构建 SSE legacy ProbeResult
+func sseProbeResult(postPath string, elapsed, score float64, serverName, serverVer, protocolVer string, caps map[string]interface{}, raw json.RawMessage) *ProbeResult {
 	return &ProbeResult{
 		Transport:        models.TransportHTTPSSELegacy,
 		FingerprintScore: score,
@@ -372,10 +385,10 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL string, 
 		ServerVersion:    serverVer,
 		ProtocolVersion:  protocolVer,
 		Capabilities:     caps,
-		RawResponse:      marshalRaw(data),
+		RawResponse:      raw,
 		NoAuth:           true,
+		MessagePath:      postPath,
 		ResponseTimeMs:   elapsed,
-		MessagePath:      postPath, // SSE legacy 专用：后续 tools/list 等请求需发到此路径
 	}
 }
 

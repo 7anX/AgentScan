@@ -62,3 +62,57 @@ func ParseEndpointEvent(r io.Reader) string {
 	}
 	return ""
 }
+
+// ParseEndpointAndListen reads a legacy HTTP+SSE stream, extracts the endpoint
+// event path, then continuously reads message events and sends decoded JSON-RPC
+// responses to msgCh. Blocks until the reader returns EOF or an error.
+// Caller should close done channel to stop early; reader.Close() is preferred.
+func ParseEndpointAndListen(r io.Reader, postPathCh chan<- string, msgCh chan<- map[string]interface{}) {
+	scanner := bufio.NewScanner(r)
+	// bufio.Scanner default buffer is 64KB; expand for large tool schemas
+	scanner.Buffer(make([]byte, 512*1024), 512*1024)
+	var eventType, dataLine string
+	endpointSent := false
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "event:"):
+			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "data:"):
+			dataLine = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		case line == "":
+			if dataLine == "" {
+				eventType = ""
+				continue
+			}
+			switch eventType {
+			case "endpoint":
+				if !endpointSent && dataLine != "" {
+					select {
+					case postPathCh <- dataLine:
+						endpointSent = true
+					default:
+					}
+				}
+			case "message", "":
+				var d map[string]interface{}
+				if json.Unmarshal([]byte(dataLine), &d) == nil {
+					select {
+					case msgCh <- d:
+					default:
+					}
+				}
+			}
+			eventType, dataLine = "", ""
+		}
+	}
+
+	// EOF without trailing blank line
+	if !endpointSent && eventType == "endpoint" && dataLine != "" {
+		select {
+		case postPathCh <- dataLine:
+		default:
+		}
+	}
+}

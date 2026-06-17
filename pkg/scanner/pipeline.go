@@ -171,8 +171,13 @@ func (p *Pipeline) analyzeCandidate(ctx context.Context, c HTTPCandidate) *model
 		return server
 	}
 
-	// 工具枚举：SSE legacy 需要 messagePath 才能找到正确的 POST endpoint
-	tools := EnumerateTools(ctx, c.BaseURL, probe.Endpoint, probe.MessagePath, probe.SessionID, c.Hostname, p.cfg.TimeoutMCPMs)
+	// 工具枚举：SSE legacy 需要重建 session（GET /sse 保持连接）才能枚举工具
+	var tools []models.MCPTool
+	if probe.Transport == models.TransportHTTPSSELegacy {
+		tools = EnumerateToolsSSELegacy(ctx, c.BaseURL, c.Hostname, p.cfg.TimeoutMCPMs)
+	} else {
+		tools = EnumerateTools(ctx, c.BaseURL, probe.Endpoint, probe.MessagePath, probe.SessionID, c.Hostname, p.cfg.TimeoutMCPMs)
+	}
 	server.Tools = tools
 	server.ToolCount = len(tools)
 

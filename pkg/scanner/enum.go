@@ -71,6 +71,99 @@ func EnumerateTools(ctx context.Context, baseURL, endpoint, messagePath, session
 	return extractTools(data)
 }
 
+// EnumerateToolsSSELegacy 专用于 SSE legacy transport 的工具枚举。
+// 重建 SSE 会话（GET /sse），在会话有效期内 POST tools/list，从流中读响应。
+// 这是 SSE legacy 协议的正确做法：session 与 GET /sse 连接绑定。
+func EnumerateToolsSSELegacy(ctx context.Context, baseURL, hostname string, timeoutMs int) []models.MCPTool {
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+	client := buildHTTPClient(hostname, timeout)
+
+	// 独立超时，不占用外层 ctx
+	sessCtx, sessCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer sessCancel()
+
+	// Step 1: 建立 SSE 连接
+	sseReq, err := http.NewRequestWithContext(sessCtx, "GET", baseURL+"/sse", nil)
+	if err != nil {
+		return nil
+	}
+	sseReq.Header.Set("Accept", "text/event-stream")
+
+	sseResp, err := client.Do(sseReq)
+	if err != nil {
+		return nil
+	}
+	defer sseResp.Body.Close()
+
+	if sseResp.StatusCode != 200 {
+		return nil
+	}
+
+	// 启动监听
+	postPathCh := make(chan string, 1)
+	msgCh := make(chan map[string]interface{}, 8)
+	go sseutil.ParseEndpointAndListen(sseResp.Body, postPathCh, msgCh)
+
+	// Step 2: 等待 endpoint event
+	var postPath string
+	select {
+	case postPath = <-postPathCh:
+	case <-sessCtx.Done():
+		return nil
+	}
+
+	if postPath == "" || !strings.HasPrefix(postPath, "/") ||
+		strings.Contains(postPath, "..") || strings.Contains(postPath, "://") {
+		return nil
+	}
+
+	// Step 3: POST tools/list
+	toolsBody, _ := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "tools/list",
+		"params":  map[string]interface{}{},
+	})
+
+	postURL := baseURL + postPath
+	postReq, err := http.NewRequestWithContext(sessCtx, "POST", postURL, bytes.NewReader(toolsBody))
+	if err != nil {
+		return nil
+	}
+	postReq.Header.Set("Content-Type", "application/json")
+
+	postResp, err := client.Do(postReq)
+	if err != nil {
+		return nil
+	}
+	defer postResp.Body.Close()
+
+	switch postResp.StatusCode {
+	case 200:
+		// 同步响应
+		var data map[string]interface{}
+		ct := postResp.Header.Get("Content-Type")
+		if strings.Contains(ct, "text/event-stream") {
+			data = sseutil.ParseFirstMessage(postResp.Body)
+		} else {
+			json.NewDecoder(io.LimitReader(postResp.Body, 1<<20)).Decode(&data)
+		}
+		return extractTools(data)
+
+	case 202:
+		// 异步响应：从 SSE 流读
+		select {
+		case data := <-msgCh:
+			return extractTools(data)
+		case <-sessCtx.Done():
+			return nil
+		}
+
+	default:
+		return nil
+	}
+}
+
 func extractTools(data map[string]interface{}) []models.MCPTool {
 	result, ok := data["result"].(map[string]interface{})
 	if !ok {
@@ -100,5 +193,3 @@ func extractTools(data map[string]interface{}) []models.MCPTool {
 	}
 	return tools
 }
-
-
