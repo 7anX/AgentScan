@@ -2,7 +2,7 @@ English | [中文](README_CN.md)
 
 # AgentScan
 
-**MCP exposure surface scanner** — discovers unauthenticated Model Context Protocol servers on the network, enumerates their tools, and detects honeypots.
+**MCP exposure surface scanner** — discovers unauthenticated Model Context Protocol servers on the network, enumerates their tools, resources, and prompts, and detects honeypots.
 
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -35,7 +35,7 @@ Real-world impact includes unauthenticated access to Kubernetes clusters, CRM da
 - **SNI-aware HTTPS** — correctly handles servers behind reverse proxies requiring TLS Server Name Indication
 - **URL path preservation** — `https://host/custom-mcp` probes `/custom-mcp` first
 - **Dual transport support** — Streamable HTTP (current spec) and legacy HTTP+SSE (2024-11-05, used by 1,227+ live servers)
-- **Tool enumeration** — read-only `tools/list`, never calls `tools/call`
+- **Full exposure enumeration** — tools, resources, resource templates, and prompts (all read-only; never calls `tools/call`)
 - **Honeypot detection** — identifies decoy servers via session ID consistency and protocol version validation
 - **JSON + terminal output** — machine-readable reports, works with pipes (`--format json 2>/dev/null | jq`)
 - **`NO_COLOR` support** — respects the [no-color.org](https://no-color.org/) standard
@@ -103,18 +103,31 @@ Target options:
 
 Scan options:
   --ports value          Comma-separated port list
-                         (default: 80,443,8000,8080,8443,3000,3001,4000,5000,9000)
+                         (default: 8000,8001,443,3000,80,8080,3001,11003,7860,3030,8443,5000,8888,8787,5001,4000,9000)
   --threads value, -T    Max concurrent TCP connections (default: 500)
+  --mcp-threads value    Max concurrent MCP probe connections (default: 50)
   --timeout value        TCP connect timeout ms (default: 500)
                          HTTP timeout = timeout × 10, MCP timeout = timeout × 20
+  --skip-port-scan       Skip TCP port scan; treat all inputs as already-open IP:Port
   --exclude-honeypots    Exclude suspected honeypots from results
 
 Output options:
   -o, --output value     JSON output file path
   --format value         terminal | json  (default: terminal)
+  --verbose, -v          Per-stage progress logging: open ports, probe targets, response times
   --verbose-raw          Include raw initialize response in JSON (increases size ~2 KB/server)
   --no-color, --Cn       Disable ANSI colors (also: set NO_COLOR env var)
 ```
+
+### Default ports
+
+Ports are selected based on evidence from real-world scanning data:
+
+| Tier | Ports | Source |
+|------|-------|--------|
+| Tier 1 — real-world top | `8000, 8001, 443, 3000, 80, 8080, 3001` | Quake global top + FOFA `header="MCP-Protocol-Version"` |
+| Tier 2 — framework defaults | `11003, 7860, 3030, 8443, 5000` | Quake China top (11003 prominent); Gradio (7860) |
+| Tier 3 — low frequency | `8888, 8787, 5001, 4000, 9000` | Long tail observed in corpus |
 
 ### Target formats
 
@@ -122,7 +135,7 @@ Output options:
 # Single IP
 10.0.0.1
 
-# CIDR (max /12 ~1M IPs)
+# CIDR
 10.0.0.0/24
 
 # IP range
@@ -164,60 +177,70 @@ agentscan scan -t 192.168.1.0/24 --format json -o out.json
 
 AgentScan is a **MCP exposure surface scanner**, not a general-purpose port scanner. The right workflow depends on your target scope.
 
-### Small scope (single host / small subnet)
+### Scenario 1: Mapping platform export (most common)
 
-Use AgentScan directly — the built-in TCP scan is sufficient:
-
-```bash
-./agentscan scan 192.168.1.0/24
-./agentscan scan api.example.com
-```
-
-### Large scope (wide internet / large CIDR)
-
-Pair AgentScan with a fast port scanner. Let masscan/nmap handle TCP at scale; feed the open ports to AgentScan for MCP identification:
+You've exported an IP:port list from Quake, FOFA, or Shodan. The ports are already confirmed open — re-running a TCP scan wastes time and connections. Use `--skip-port-scan` to jump straight to MCP probing.
 
 ```bash
-# Step 1: fast TCP scan — find open ports at scale
-masscan 10.0.0.0/8 -p 80,443,8000,8080,8443,3000,3001,4000,5000,9000 \
-  --rate 100000 -oG open_ports.txt
-
-# Step 2: convert masscan output to host:port list
-grep "Host:" open_ports.txt | awk '{print $2":"$5}' | sed 's|/open||' > targets.txt
-
-# Step 3: AgentScan does MCP fingerprinting, tool enum, honeypot detection
-./agentscan scan -f targets.txt --format json -o results.json
+# Export from Quake/FOFA as IP:port list, then verify with AgentScan
+agentscan scan -f quake_results.txt --skip-port-scan --mcp-threads 200 --format json -o verified.json
 ```
 
-> This division of labor is intentional: masscan/nmap are optimized for raw TCP throughput; AgentScan is optimized for MCP-layer analysis. They complement, not replace, each other.
+`--skip-port-scan` skips Stage 1 entirely and treats every line in the file as an already-open endpoint. This is roughly 3x faster for pre-filtered inputs because it cuts out TCP connection overhead for the scan phase.
 
-### Passive discovery via internet mapping platforms
+### Scenario 2: masscan + AgentScan pipeline (internet-scale)
 
-Use platform queries (Shodan/FOFA/ZoomEye) to get a pre-filtered candidate list, then verify with AgentScan:
+For large CIDRs, let masscan handle raw TCP throughput and feed the open ports to AgentScan for MCP-layer analysis. The two tools complement each other: masscan is optimized for packets-per-second; AgentScan is optimized for protocol correctness.
 
 ```bash
-# Export results from Shodan/FOFA as IP:port list, then:
-./agentscan scan -f shodan_results.txt --format json -o verified.json
+# Step 1: masscan for TCP — finds open ports at line rate
+masscan 1.0.0.0/8 -p 8000,8001,443,3000,80,8080,3001,11003 --rate 100000 -oL open_ports.txt
+
+# Step 2: convert masscan -oL output to host:port list
+grep "open" open_ports.txt | awk '{print $4":"$3}' > targets.txt
+
+# Step 3: AgentScan handles MCP fingerprinting, enumeration, honeypot detection
+agentscan scan -f targets.txt --skip-port-scan --mcp-threads 200 --timeout 3000 --format json -o results.json
 ```
 
-### Focused research on a known host
+### Scenario 3: Internal network segment scan
 
-When you already know a host runs MCP (e.g. from a Shodan result), skip port scanning entirely:
+Low-latency internal networks tolerate much tighter timeouts and higher concurrency than the internet. Shrink `--timeout` to 200 ms and push `--threads` up to saturate the local link.
 
 ```bash
-# Direct URL — no port scan, no HTTP filter, straight to MCP probe
-./agentscan scan https://api.example.com/mcp
-./agentscan scan https://api.example.com:8443/v1/mcp
+# Single subnet
+agentscan scan 192.168.1.0/24 --timeout 200 --threads 2000 --mcp-threads 100
+
+# Multiple segments
+agentscan scan -t 10.0.0.0/8 -t 172.16.0.0/12 --timeout 200 --threads 2000 --mcp-threads 200 --format json -o intranet.json
 ```
 
-### CI / automated pipeline
+> **Note:** a `/8` is 16M IPs × 17 default ports = ~272M TCP probes. Use `--ports` to limit scope to the two or three ports you actually expect to see on your network.
+
+### Scenario 4: Single host or known URL (targeted research)
+
+When a mapping platform result gives you a specific URL, skip all scanning stages and go directly to MCP probing. AgentScan preserves the URL path and uses it as the first probe target.
 
 ```bash
-# Exit code 0 = scan completed (regardless of findings)
-# Parse results with jq
-./agentscan scan 10.0.0.0/24 --format json 2>/dev/null \
-  | jq '.results[] | select(.no_auth == true) | {ip, port, server_name, tool_count}'
+# Direct URL — Stage 1 and 2 are skipped automatically
+agentscan scan https://api.example.com/mcp
+
+# Multiple known hosts, verbose output
+agentscan scan -t host:8000 -t host:3000 --skip-port-scan --verbose
 ```
+
+### Scenario 5: CI / automated pipeline
+
+JSON output goes to stdout; all progress messages go to stderr. That makes it safe to pipe through `jq` without filtering noise.
+
+```bash
+agentscan scan 10.0.0.0/24 --format json -o results.json 2>/dev/null
+
+# Find unauthenticated servers and print IP, port, and tool count
+cat results.json | jq '.results[] | select(.no_auth == true) | {ip, port, tool_count}'
+```
+
+Exit code is always `0` on scan completion regardless of findings. Non-zero codes indicate a fatal error (bad flag, unresolvable target, etc.).
 
 ---
 
@@ -226,17 +249,21 @@ When you already know a host runs MCP (e.g. from a Shodan result), skip port sca
 ### Terminal (default)
 
 ```
-[MCP] 203.0.113.42:443  /mcp  streamable_http  v=2025-06-18  no-auth
-      server="Binance Square Publisher/1.27.2"  tools=1
+[MCP] 1.2.3.4:8000  /mcp  streamable_http  v=2025-06-18  no-auth
+      server="my-mcp/1.0"  tools=5  resources=2  res_templates=1  prompts=3
 
 [MCP] 203.0.113.10:3000  /sse  http_sse_legacy  v=2024-11-05  no-auth
-      server="internal-tools/2.1"  tools=4
+      server="internal-tools/2.1"  tools=4  resources=0  res_templates=0  prompts=0
       [HONEYPOT] score=60  signals: invalid_version_accepted:9999-99-99, session_id_identical:abc123
 
 === AgentScan Summary ===
-MCP servers found : 2
-  Unauthenticated : 2
-  Honeypots       : 1
+MCP servers found  : 2
+  Unauthenticated  : 2
+  Auth required    : 0
+  Honeypots        : 1
+  Total tools      : 9
+  Total resources  : 2
+  Total prompts    : 3
 ```
 
 Progress and warnings go to **stderr**; only JSON results go to **stdout**. Safe to pipe:
@@ -251,9 +278,14 @@ agentscan scan 10.0.0.0/24 --format json 2>/dev/null | jq '.results[].server_nam
 {
   "version": "1.0",
   "summary": {
-    "total": 1,
-    "unauthenticated": 1,
-    "honeypots": 0
+    "total": 2,
+    "unauthenticated": 2,
+    "auth_required": 0,
+    "honeypots": 0,
+    "total_tools": 34,
+    "total_resources": 0,
+    "total_resource_templates": 0,
+    "total_prompts": 0
   },
   "results": [
     {
@@ -268,6 +300,12 @@ agentscan scan 10.0.0.0/24 --format json 2>/dev/null | jq '.results[].server_nam
       "server_version": "1.27.2",
       "tool_count": 1,
       "tools": [{"name": "publish_article", "description": "..."}],
+      "resource_count": 2,
+      "resources": [{"uri": "file:///data/config", "name": "config", "mimeType": "application/json"}],
+      "resource_template_count": 0,
+      "resource_templates": [],
+      "prompt_count": 0,
+      "prompts": [],
       "honeypot": {"suspected": false, "score": 0},
       "scan_time": "2026-06-17T12:00:00Z",
       "response_time_ms": 142,
@@ -284,25 +322,39 @@ agentscan scan 10.0.0.0/24 --format json 2>/dev/null | jq '.results[].server_nam
 ```
 Input (IP / CIDR / IP range / domain / URL / file)
   │
-  ▼  Stage 1: Target parsing
+  ▼  Target parsing
      Resolves domains to IPs, preserves hostname for SNI
      Preserves URL path (e.g. /mcp) for priority probing
   │
-  ▼  Stage 2: TCP port scan   (concurrent, default 500ms timeout)
-     Ports: 80 443 8000 8080 8443 3000 3001 4000 5000 9000
+  ▼  Stage 1: TCP port scan   [skippable with --skip-port-scan]
+     Ports (17): 8000 8001 443 3000 80 8080 3001 11003 7860
+                 3030 8443 5000 8888 8787 5001 4000 9000
+     Concurrent goroutines, default 500 ms connect timeout
   │
-  ▼  Stage 3: HTTP filter     (concurrent GET /, reads Server/Content-Type headers)
+  ▼  Stage 2: HTTP filter
+     Concurrent GET /, reads Server and Content-Type headers
+     Drops non-HTTP responses early to reduce MCP probe load
   │
-  ▼  Stage 4: MCP fingerprint (SNI-aware HTTPS, ≥0.65 score = confirmed MCP)
-     Endpoints tried: user path → /mcp → /sse → / → /messages → /api/mcp → /v1/mcp
-     Score:  protocolVersion present          +0.2
-             MCP-specific capabilities key    +0.3
-             serverInfo.name present          +0.1
-             (LSP capabilities → score = 0, rejected)
+  ▼  Stage 3: MCP probe       (dual transport, --mcp-threads concurrency)
+     Tries 25 endpoint paths: /mcp, /sse, /messages/, /gradio_api/mcp,
+       /api/v1/mcp/sse, /.well-known/mcp/server-card.json, ...
+     SSE paths: /sse, /mcp/sse, /mcp-server/sse, /sse/,
+                /api/v1/mcp/sse, /gradio_api/mcp/
+     Sends initialize, then notifications/initialized before any requests
+     Fingerprint scoring:
+       protocolVersion present          +0.2
+       MCP-specific capabilities key    +0.3
+       serverInfo.name present          +0.1
+       LSP capabilities detected    → score = 0, rejected
+     ≥ 0.65 = confirmed MCP
   │
-  ▼  Stage 5: Deep analysis   (parallel)
-     5A: Tool enumeration  (tools/list — read-only, never tools/call)
-     5B: Honeypot detection (2 signals)
+  ▼  Stage 4: Exposure enumeration  (parallel, read-only)
+     tools/list            → MCPTool    (name, description, inputSchema)
+     resources/list        → MCPResource (uri, name, description, mimeType)
+     resources/templates/list → MCPResourceTemplate (uriTemplate, name, description)
+     prompts/list          → MCPPrompt  (name, description)
+  │
+  ▼  Stage 5: Honeypot detection (2 signals)
   │
   ▼  Output: terminal (stderr for progress) / JSON (stdout)
 ```
@@ -383,7 +435,7 @@ http.header.server="uvicorn" +http.body="mcp"
 
 ### Censys
 
-> ⚠️ Censys indexes only the first **2 KB** of HTTP response bodies — MCP `initialize` responses often exceed this, causing high miss rates. Use header-based searches only.
+> Censys indexes only the first **2 KB** of HTTP response bodies — MCP `initialize` responses often exceed this, causing high miss rates. Use header-based searches only.
 
 ```
 services.http.response.headers: (key="Content-Type" and value="text/event-stream")
@@ -409,13 +461,16 @@ internal/
   version/       Build-time version injection via -ldflags
 
 pkg/
-  models/        Data structures (MCPServer, ScanConfig, HoneypotResult)
+  models/        Data structures (MCPServer, MCPTool, MCPResource,
+                   MCPResourceTemplate, MCPPrompt, ScanConfig, HoneypotResult)
   target/        Input parsing (IP, CIDR, range, domain, URL)
   scanner/
     port.go      TCP port scan (goroutine + semaphore)
     http_filter  HTTP candidate filtering (concurrent, SNI-aware)
-    mcp_probe    MCP fingerprinting (3-layer scoring, dual transport)
-    enum.go      Tool enumeration (tools/list, read-only)
+    mcp_probe    MCP fingerprinting (3-layer scoring, dual transport,
+                   25-path dictionary, notifications/initialized handshake)
+    enum.go      Exposure enumeration: tools/list, resources/list,
+                   resources/templates/list, prompts/list
     pipeline.go  Five-stage orchestration + RunScan entry point
   analysis/
     honeypot.go  Honeypot detection (2 signals)
@@ -431,7 +486,7 @@ pkg/
 > **This tool is for authorized security testing and research only.**  
 > Scanning systems without permission may violate computer fraud and abuse laws in your jurisdiction.
 
-- AgentScan only calls `tools/list` — it never invokes `tools/call`
+- AgentScan only calls `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list` — it never invokes `tools/call` or writes anything to a server
 - After finding exposed servers, follow responsible disclosure: notify the owner, allow 90 days to remediate before public disclosure
 - The tool starts scanning immediately — no confirmation prompt. You are responsible for scanning only authorized targets.
 
@@ -458,5 +513,5 @@ MIT — see [LICENSE](LICENSE)
 
 ## Disclaimer
 
-AgentScan is provided for **authorized security testing and research only**.  
+AgentScan is provided for **authorized security testing and research only.**  
 The authors are not responsible for any misuse or damage caused by this tool.
