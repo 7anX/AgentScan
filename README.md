@@ -1,6 +1,6 @@
 # AgentScan
 
-**MCP exposure surface scanner** — discovers unauthenticated Model Context Protocol servers on the network, enumerates their tools, and assesses risk.
+**MCP exposure surface scanner** — discovers unauthenticated Model Context Protocol servers on the network, enumerates their tools, and detects honeypots.
 
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -27,13 +27,16 @@ Real-world impact includes unauthenticated access to Kubernetes clusters, CRM da
 
 ## Features
 
-- **Active CIDR/IP/domain scanning** — no Shodan dependency
+- **Active CIDR/IP/domain scanning** — no Shodan dependency, no confirmation prompt
+- **Multiple input formats** — IP, CIDR, IP range (`1.1.1.1-2.2.2.3`), domain, `host:port`, URL (`https://host/path`)
 - **Accurate MCP fingerprinting** — 3-layer weighted scoring (≥0.65 = confirmed MCP), rejects LSP and generic JSON-RPC false positives
-- **Dual transport support** — Streamable HTTP (current spec) and legacy HTTP+SSE (2024-11-05)
-- **Tool enumeration** — reads-only `tools/list`, never calls `tools/call`
-- **Risk assessment** — CRITICAL / HIGH / MEDIUM / LOW / INFO with MITRE ATT&CK mapping
-- **Honeypot detection** — identifies decoy servers (fixed session ID, accepts invalid protocol versions)
-- **JSON + terminal output** — machine-readable reports for CI/CD pipelines
+- **SNI-aware HTTPS** — correctly handles servers behind reverse proxies requiring TLS Server Name Indication
+- **URL path preservation** — `https://host/custom-mcp` probes `/custom-mcp` first
+- **Dual transport support** — Streamable HTTP (current spec) and legacy HTTP+SSE (2024-11-05, used by 1,227+ live servers)
+- **Tool enumeration** — read-only `tools/list`, never calls `tools/call`
+- **Honeypot detection** — identifies decoy servers via session ID consistency and protocol version validation
+- **JSON + terminal output** — machine-readable reports, works with pipes (`--format json 2>/dev/null | jq`)
+- **`NO_COLOR` support** — respects the [no-color.org](https://no-color.org/) standard
 
 ---
 
@@ -44,18 +47,46 @@ git clone https://github.com/agentscan/agentscan
 cd agentscan
 go build -o agentscan .
 
+# Scan a domain
+./agentscan scan api.example.com
+
 # Scan a subnet
-./agentscan scan 192.168.1.0/24 --agree-tos
+./agentscan scan 192.168.1.0/24
+
+# Scan an IP range
+./agentscan scan 10.0.0.1-10.0.0.50
 
 # Scan from a target file
-./agentscan scan -f targets.txt --agree-tos
+./agentscan scan -f targets.txt
+
+# Scan a specific MCP URL directly
+./agentscan scan https://api.example.com/mcp
 
 # Save results as JSON
-./agentscan scan 10.0.0.0/8 --format json -o results.json --agree-tos
+./agentscan scan 10.0.0.0/24 --format json -o results.json
 
-# Show only HIGH and above
-./agentscan scan api.example.com --min-risk high --agree-tos
+# Multiple targets with -t
+./agentscan scan -t 192.168.1.0/24 -t api.example.com
 ```
+
+> **No confirmation prompt.** AgentScan starts immediately. You are responsible for scanning only systems you are authorized to test.
+
+---
+
+## Build
+
+```bash
+# Native binary (current OS/arch)
+powershell -ExecutionPolicy Bypass -File build.ps1   # Windows
+./build.sh                                            # Linux/macOS
+
+# Cross-compile
+./build.sh linux amd64
+./build.sh darwin arm64
+powershell -ExecutionPolicy Bypass -File build.ps1 -OS linux -Arch amd64
+```
+
+Output: `dist/agentscan` (or `dist/agentscan.exe` on Windows).
 
 ---
 
@@ -64,19 +95,23 @@ go build -o agentscan .
 ```
 agentscan scan [OPTIONS] [TARGET...]
 
-Options:
-  -f, --file string           Target file (one IP/CIDR/domain per line, # comments OK)
-  --ports string              Port list (default: 80,443,8000,8080,8443,3000,3001,4000,5000,9000)
-  --concurrency int           Max concurrent TCP connections (default: 500)
-  --timeout-connect int       TCP connect timeout ms (default: 500)
-  --timeout-http int          HTTP timeout ms (default: 5000)
-  --timeout-mcp int           MCP probe timeout ms (default: 10000)
-  --exclude-honeypots         Filter out suspected honeypots
-  -o, --output string         JSON output file path
-  --format string             terminal | json  (default: terminal)
-  --min-risk string           critical | high | medium | low | info  (default: info)
-  --no-color                  Disable ANSI colors
-  --agree-tos                 Skip legal confirmation (for CI/CD)
+Target options:
+  -t, --target value     Target(s): IP, CIDR, IP range, domain, host:port, URL. Repeatable.
+  -f, --file value       File with targets (one per line, # comments supported)
+
+Scan options:
+  --ports value          Comma-separated port list
+                         (default: 80,443,8000,8080,8443,3000,3001,4000,5000,9000)
+  --threads value, -T    Max concurrent TCP connections (default: 500)
+  --timeout value        TCP connect timeout ms (default: 500)
+                         HTTP timeout = timeout × 10, MCP timeout = timeout × 20
+  --exclude-honeypots    Exclude suspected honeypots from results
+
+Output options:
+  -o, --output value     JSON output file path
+  --format value         terminal | json  (default: terminal)
+  --verbose-raw          Include raw initialize response in JSON (increases size ~2 KB/server)
+  --no-color, --Cn       Disable ANSI colors (also: set NO_COLOR env var)
 ```
 
 ### Target formats
@@ -85,14 +120,22 @@ Options:
 # Single IP
 10.0.0.1
 
-# CIDR
+# CIDR (max /12 ~1M IPs)
 10.0.0.0/24
+
+# IP range
+10.0.0.1-10.0.0.50
+192.168.1.1-255        # short form: last octet only
 
 # Domain
 api.example.com
 
 # Domain with specific port
 api.example.com:8080
+
+# URL — path is preserved and tried first
+https://api.example.com/mcp
+http://internal-host:8000/api/mcp
 
 # File (-f targets.txt)
 10.0.0.1
@@ -102,6 +145,17 @@ api.example.com:8080
 api.example.com
 ```
 
+### Flag placement
+
+Flags can appear **before or after** positional targets:
+
+```bash
+# All equivalent:
+agentscan scan 192.168.1.0/24 --format json
+agentscan scan --format json 192.168.1.0/24
+agentscan scan -t 192.168.1.0/24 --format json -o out.json
+```
+
 ---
 
 ## Output
@@ -109,30 +163,23 @@ api.example.com
 ### Terminal (default)
 
 ```
-[CRITICAL] 203.0.113.42:8000  /mcp  streamable_http  v=2025-06-18  no-auth
-           server="internal-tools/1.2.3"  tools=7
-           ⚠ rce_tool:execute_command
-           ⚠ cloud_control:k8s_pods_exec(k8s)
-           honeypot=false(score=5)
+[MCP] 203.0.113.42:443  /mcp  streamable_http  v=2025-06-18  no-auth
+      server="Binance Square Publisher/1.27.2"  tools=1
 
-[HIGH]     203.0.113.10:3000  /sse  http_sse_legacy  v=2024-11-05  no-auth
-           server="crm-agent/2.1"  tools=12
-           ⚠ db_access:execute_sql
-           ⚠ credential_in_metadata:get_customers
-           honeypot=false(score=10)
-
-[HONEYPOT] 1.2.3.4:8080  /mcp
-           suspected=true(score=60)
-           signals: invalid_version_accepted:9999-99-99, session_id_identical:honeypot-fixe
+[MCP] 203.0.113.10:3000  /sse  http_sse_legacy  v=2024-11-05  no-auth
+      server="internal-tools/2.1"  tools=4
+      [HONEYPOT] score=60  signals: invalid_version_accepted:9999-99-99, session_id_identical:abc123
 
 === AgentScan Summary ===
-Total MCP servers found: 3
-  CRITICAL : 1
-  HIGH     : 1
-  MEDIUM   : 0
-  LOW      : 0
-  INFO     : 0
-Honeypots  : 1
+MCP servers found : 2
+  Unauthenticated : 2
+  Honeypots       : 1
+```
+
+Progress and warnings go to **stderr**; only JSON results go to **stdout**. Safe to pipe:
+
+```bash
+agentscan scan 10.0.0.0/24 --format json 2>/dev/null | jq '.results[].server_name'
 ```
 
 ### JSON
@@ -141,24 +188,27 @@ Honeypots  : 1
 {
   "version": "1.0",
   "summary": {
-    "total": 3,
-    "by_risk": {"CRITICAL": 1, "HIGH": 1},
-    "honeypots": 1
+    "total": 1,
+    "unauthenticated": 1,
+    "honeypots": 0
   },
   "results": [
     {
       "ip": "203.0.113.42",
-      "port": 8000,
+      "port": 443,
+      "url": "https://203.0.113.42:443",
       "endpoint": "/mcp",
       "transport": "streamable_http",
       "protocol_version": "2025-06-18",
       "no_auth": true,
-      "server_name": "internal-tools",
-      "tool_count": 7,
-      "risk_level": "CRITICAL",
-      "risk_score": 80,
-      "risk_reasons": ["unauthenticated_access", "rce_tool:execute_command"],
-      "mitre": ["T1059", "T1059.004"]
+      "server_name": "Binance Square Publisher",
+      "server_version": "1.27.2",
+      "tool_count": 1,
+      "tools": [{"name": "publish_article", "description": "..."}],
+      "honeypot": {"suspected": false, "score": 0},
+      "scan_time": "2026-06-17T12:00:00Z",
+      "response_time_ms": 142,
+      "tls_enabled": true
     }
   ]
 }
@@ -166,17 +216,33 @@ Honeypots  : 1
 
 ---
 
-## Risk Levels
+## How It Works
 
-| Level | Trigger conditions | Example tools |
-|-------|-------------------|---------------|
-| **CRITICAL** | RCE tool names, cloud/K8s control, dangerous params (cmd/shell/exec) | `execute_command`, `k8s_pods_exec`, `run_script` |
-| **HIGH** | Database access, credential leakage in metadata, SSRF params | `execute_sql`, `query_database`, AWS key in description |
-| **MEDIUM** | SSRF params (url/webhook/callback) | `fetch_url(url)`, `send_webhook(endpoint)` |
-| **LOW** | Read-only tools with no risky patterns | `list_files`, `search_docs` |
-| **INFO** | Server online, tools not enumerable (authenticated) | — |
-
-Detection rules are ported from [honeymcp](https://github.com/kosiorkosa47/honeymcp) (`secret_exfil.rs`) and [MCPScan](https://github.com/sahiloj/MCPScan) (`rce-vectors.ts`).
+```
+Input (IP / CIDR / IP range / domain / URL / file)
+  │
+  ▼  Stage 1: Target parsing
+     Resolves domains to IPs, preserves hostname for SNI
+     Preserves URL path (e.g. /mcp) for priority probing
+  │
+  ▼  Stage 2: TCP port scan   (concurrent, default 500ms timeout)
+     Ports: 80 443 8000 8080 8443 3000 3001 4000 5000 9000
+  │
+  ▼  Stage 3: HTTP filter     (concurrent GET /, reads Server/Content-Type headers)
+  │
+  ▼  Stage 4: MCP fingerprint (SNI-aware HTTPS, ≥0.65 score = confirmed MCP)
+     Endpoints tried: user path → /mcp → /sse → / → /messages → /api/mcp → /v1/mcp
+     Score:  protocolVersion present          +0.2
+             MCP-specific capabilities key    +0.3
+             serverInfo.name present          +0.1
+             (LSP capabilities → score = 0, rejected)
+  │
+  ▼  Stage 5: Deep analysis   (parallel)
+     5A: Tool enumeration  (tools/list — read-only, never tools/call)
+     5B: Honeypot detection (2 signals)
+  │
+  ▼  Output: terminal (stderr for progress) / JSON (stdout)
+```
 
 ---
 
@@ -186,33 +252,32 @@ AgentScan detects decoy servers using two signals derived from Bitsight's analys
 
 | Signal | Score | Description |
 |--------|-------|-------------|
-| `invalid_version_accepted` | +20 | Server accepts `protocolVersion: "9999-99-99"` without error (spec requires rejection) |
+| `invalid_version_accepted` | +20 | Server accepts `protocolVersion: "9999-99-99"` without error (spec requires rejection or `-32602`) |
 | `session_id_identical` | +40 | Two separate `initialize` calls return the same `MCP-Session-Id` (spec requires globally unique IDs) |
 
-Score ≥ 40 → `suspected_honeypot: true` (shown but not filtered by default; use `--exclude-honeypots` to filter).
+Score ≥ 40 → `suspected_honeypot: true` (shown in output but not filtered by default; use `--exclude-honeypots` to exclude).
 
 ---
 
 ## Internet Mapping (Shodan / FOFA / ZoomEye)
 
-The following queries can be used with internet scanning platforms to enumerate publicly exposed MCP servers for research purposes. **Do not scan systems without authorization.**
+The following queries locate publicly exposed MCP servers for **research purposes only**. Do not scan systems without authorization.
 
 ### Shodan
 
 ```
-# Highest precision — MCP-specific HTTP header
+# Highest precision — MCP-specific HTTP response header
 "MCP-Protocol-Version"
 
-# Version string in response body
-"protocolVersion" "2024-11-05"
-"protocolVersion" "2025-03-26"
-"protocolVersion" "2025-06-18"
+# Protocol version string in response body
 "protocolVersion" "2025-11-25"
+"protocolVersion" "2025-06-18"
+"protocolVersion" "2024-11-05"
 
 # serverInfo field (unique to MCP initialize response)
 "serverInfo" "protocolVersion"
 
-# Transport characteristics
+# Port + protocol combinations
 port:8000 "jsonrpc" "tools"
 port:3000 "text/event-stream" "jsonrpc"
 port:8080 "text/event-stream" "mcp"
@@ -225,8 +290,10 @@ http.title:"MCP Server"
 
 ### FOFA
 
+> **Recommended for Chinese domestic targets** — significantly better coverage than Shodan behind WAFs.
+
 ```
-# Most precise — MCP session header
+# MCP-specific response headers (most precise)
 header="MCP-Protocol-Version"
 header="MCP-Session-Id"
 
@@ -246,71 +313,64 @@ title="MCP Server"
 ### ZoomEye
 
 ```
-# Header search
 http.header="MCP-Protocol-Version"
-
-# Body + header combination
 http.header="text/event-stream" +http.body="jsonrpc" +http.body="protocolVersion"
-
-# Framework
 http.header.server="uvicorn" +http.body="mcp"
 ```
 
 ### Censys
 
-> ⚠️ Censys only indexes the first **2 KB** of HTTP response bodies. MCP `initialize` responses often exceed this limit, so body-based searches have high miss rates. Header-based searches are more reliable.
+> ⚠️ Censys indexes only the first **2 KB** of HTTP response bodies — MCP `initialize` responses often exceed this, causing high miss rates. Use header-based searches only.
 
 ```
-# Services HTTP header search
 services.http.response.headers: (key="Content-Type" and value="text/event-stream")
-
-# Body search (limited to 2 KB)
 services.http.response.body: "serverInfo"
 ```
 
-**Platform recommendation by target:**
-- International targets: **Shodan** (industry standard, widest MCP community adoption)
-- Chinese domestic targets: **FOFA** (dominant domestic coverage, better WAF bypass)
-- Avoid Censys for body-based MCP detection (2 KB body index limit causes significant miss rate)
+**Platform summary:**
+
+| Platform | Best for | Notes |
+|----------|----------|-------|
+| **Shodan** | International targets | Industry standard; widest MCP community adoption |
+| **FOFA** | Chinese domestic targets | Dominant coverage; better WAF bypass |
+| ZoomEye | Supplementary | Good body search support |
+| Censys | Header-only searches | 2 KB body limit causes body-search misses |
+
+---
+
+## Architecture
+
+```
+internal/
+  sseutil/       Shared SSE parsing (ParseFirstMessage, ParseEndpointEvent)
+  version/       Build-time version injection via -ldflags
+
+pkg/
+  models/        Data structures (MCPServer, ScanConfig, HoneypotResult)
+  target/        Input parsing (IP, CIDR, range, domain, URL)
+  scanner/
+    port.go      TCP port scan (goroutine + semaphore)
+    http_filter  HTTP candidate filtering (concurrent, SNI-aware)
+    mcp_probe    MCP fingerprinting (3-layer scoring, dual transport)
+    enum.go      Tool enumeration (tools/list, read-only)
+    pipeline.go  Five-stage orchestration + RunScan entry point
+  analysis/
+    honeypot.go  Honeypot detection (2 signals)
+  output/
+    terminal.go  ANSI terminal output (NO_COLOR aware)
+    json.go      Structured JSON report
+```
 
 ---
 
 ## Legal & Ethics
 
-> **This tool is for authorized security testing only.**
+> **This tool is for authorized security testing and research only.**  
 > Scanning systems without permission may violate computer fraud and abuse laws in your jurisdiction.
 
-- Never invoke `tools/call` on discovered servers — AgentScan only calls `tools/list`
-- After finding exposed servers, follow responsible disclosure: contact the owner, allow 90 days to fix before public disclosure
-- The `--agree-tos` flag skips the legal confirmation prompt (intended for CI/CD pipelines scanning your own infrastructure)
-
----
-
-## How It Works
-
-```
-Input (IP / CIDR / domain / file)
-  │
-  ▼ Stage 1: Target parsing
-  │
-  ▼ Stage 2: TCP port scan   (goroutine + semaphore, 500ms timeout)
-     Ports: 80 443 8000 8080 8443 3000 3001 4000 5000 9000
-  │
-  ▼ Stage 3: HTTP filter     (GET /, check headers, 5s timeout)
-  │
-  ▼ Stage 4: MCP fingerprint (3-layer scoring, ≥0.65 = confirmed)
-     Try: /mcp → /sse → / → /messages → /api/mcp → /v1/mcp
-     L1: protocolVersion + MCP-specific capabilities (+0.5)
-     L2: tools/list returns valid Tool schema (+0.2)
-     L3: ping + notifications/initialized behavior (+0.3)
-  │
-  ▼ Stage 5: Deep analysis   (parallel)
-     5A: Tool enumeration (tools/list, read-only)
-     5B: Honeypot detection (2 signals)
-     5C: Risk scoring (MITRE ATT&CK mapped)
-  │
-  ▼ Output: terminal / JSON
-```
+- AgentScan only calls `tools/list` — it never invokes `tools/call`
+- After finding exposed servers, follow responsible disclosure: notify the owner, allow 90 days to remediate before public disclosure
+- The tool starts scanning immediately — no confirmation prompt. You are responsible for scanning only authorized targets.
 
 ---
 
@@ -318,11 +378,12 @@ Input (IP / CIDR / domain / file)
 
 | Source | Key finding |
 |--------|-------------|
-| [arXiv:2605.22333](https://arxiv.org/abs/2605.22333) (2026-05) | 7,973 live MCP servers scanned; 40.55% unauthenticated; 9 CVEs |
-| [arXiv:2510.16558](https://arxiv.org/abs/2510.16558) (DSN 2026) | Two-stage attack surface model; 833 vulnerable servers in 67,057 |
+| [arXiv:2605.22333](https://arxiv.org/abs/2605.22333) (2026-05) | 7,973 live servers; 40.55% unauthenticated; used FOFA+Shodan to discover them |
+| [arXiv:2510.16558](https://arxiv.org/abs/2510.16558) (DSN 2026) | Two-stage attack surface model; 833 vulnerable in 67,057 scanned |
 | [arXiv:2601.17549](https://arxiv.org/abs/2601.17549) | Protocol version downgrade vulnerabilities; +23–41% attack success rate |
-| [Bitsight TRACE](https://www.bitsight.com/blog/exposed-mcp-servers-reveal-new-ai-vulnerabilities) (2025-12) | ~1,000 exposed; 1,100+ honeypots identified with fixed session IDs |
-| [Trend Micro](https://www.trendmicro.com/vinfo/us/security/news/vulnerabilities-and-exploits/update-on-exposed-mcp-servers-the-threat-widens-to-the-cloud) (2026-04) | 1,467 exposed; CVSS 9.8 in AWS/Azure MCP servers; cloud account takeover |
+| [Bitsight TRACE](https://www.bitsight.com/blog/exposed-mcp-servers-reveal-new-ai-vulnerabilities) (2025-12) | ~1,000 exposed; 1,100+ honeypots with fixed session IDs |
+| [Trend Micro](https://www.trendmicro.com/vinfo/us/security/news/vulnerabilities-and-exploits/update-on-exposed-mcp-servers-the-threat-widens-to-the-cloud) (2026-04) | 1,467 exposed; CVSS 9.8 vulns in AWS/Azure MCP servers |
+| [GuidePoint Security](https://www.guidepointsecurity.com/blog/mcp-deployment-security-ai-ai-ai/) (2026-06) | 2,305 exposed of 62,000 probed; finance/medical/ERP systems |
 
 ---
 
