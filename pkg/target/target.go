@@ -15,6 +15,7 @@ type Target struct {
 	Port     int
 	Hostname string // 原始域名（用于 HTTPS SNI）
 	URLPath  string // 用户指定的路径（如 /mcp），优先于默认端点列表
+	Proto    string // "http" 或 "https"，来自输入 URL；为空时由 FilterHTTP 按端口推断
 }
 
 // Parse 解析输入，返回 (ip, port) 对列表
@@ -27,6 +28,11 @@ func Parse(input string, ports []int) ([]Target, error) {
 
 	// URL 格式：http(s)://host[:port][/path]
 	if strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://") {
+		u, err2 := url.Parse(input)
+		if err2 != nil {
+			return nil, fmt.Errorf("invalid URL %s: %w", input, err2)
+		}
+		proto := u.Scheme // "http" 或 "https"
 		host, explicitPort, err := extractHostPort(input)
 		if err != nil {
 			return nil, fmt.Errorf("invalid URL %s: %w", input, err)
@@ -42,8 +48,9 @@ func Parse(input string, ports []int) ([]Target, error) {
 			hostname = host
 		}
 		ts := buildTargetsWithHostname(ips, ports, explicitPort, hostname)
-		if urlPath != "" && urlPath != "/" {
-			for i := range ts {
+		for i := range ts {
+			ts[i].Proto = proto
+			if urlPath != "" && urlPath != "/" {
 				ts[i].URLPath = urlPath
 			}
 		}

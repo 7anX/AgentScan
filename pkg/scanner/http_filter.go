@@ -55,9 +55,14 @@ func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int) []HTTPCa
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			proto := "http"
-			if p.Port == 443 || p.Port == 8443 {
-				proto = "https"
+			// 协议优先级：用户指定 > 端口推断（443/8443 → https，其余 → http）
+			proto := p.Proto
+			if proto == "" {
+				if p.Port == 443 || p.Port == 8443 {
+					proto = "https"
+				} else {
+					proto = "http"
+				}
 			}
 
 			// BaseURL 使用 hostname（如有）确保 HTTPS SNI 正确，否则用 IP
@@ -76,9 +81,11 @@ func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int) []HTTPCa
 			priority := 0
 
 			req, err := http.NewRequestWithContext(ctx, "GET", baseURL+"/", nil)
+			connOK := false
 			if err == nil {
 				req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; agentscan/1.0)")
 				if resp, err2 := client.Do(req); err2 == nil {
+					connOK = true
 					server = strings.ToLower(resp.Header.Get("Server"))
 					ct = strings.ToLower(resp.Header.Get("Content-Type"))
 					resp.Body.Close()
@@ -92,9 +99,41 @@ func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int) []HTTPCa
 					if priority == 0 && (strings.Contains(ct, "text/event-stream") || strings.Contains(ct, "application/json")) {
 						priority = 1
 					}
+				} else {
+					// GET / 失败（TLS 错误 / 超时）→ connOK=false，触发 proto 降级逻辑
 				}
-				// GET / 失败（404/重定向/证书错误）→ priority=0，仍然纳入候选
 			}
+
+			// 若用户指定了 proto 但连接失败（如写错 https/http），自动尝试另一个协议
+			if !connOK && p.Proto != "" {
+				altProto := "http"
+				if proto == "http" {
+					altProto = "https"
+				}
+				altBaseURL := fmt.Sprintf("%s://%s:%d", altProto, host, p.Port)
+				altReq, err2 := http.NewRequestWithContext(ctx, "GET", altBaseURL+"/", nil)
+				if err2 == nil {
+					altReq.Header.Set("User-Agent", "Mozilla/5.0 (compatible; agentscan/1.0)")
+					if resp, err3 := client.Do(altReq); err3 == nil {
+						connOK = true
+						baseURL = altBaseURL // 切换到能用的协议
+						server = strings.ToLower(resp.Header.Get("Server"))
+						ct = strings.ToLower(resp.Header.Get("Content-Type"))
+						resp.Body.Close()
+
+						for _, hint := range mcpServerHints {
+							if strings.Contains(server, hint) {
+								priority = 2
+								break
+							}
+						}
+						if priority == 0 && (strings.Contains(ct, "text/event-stream") || strings.Contains(ct, "application/json")) {
+							priority = 1
+						}
+					}
+				}
+			}
+			// GET / 失败（404/重定向/证书错误）→ priority=0，仍然纳入候选
 
 			mu.Lock()
 			candidates = append(candidates, HTTPCandidate{

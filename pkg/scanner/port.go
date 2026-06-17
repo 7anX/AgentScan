@@ -17,6 +17,7 @@ type PortResult struct {
 	Port     int
 	Hostname string // 传递自 Target，用于后续 SNI
 	URLPath  string // 用户指定的路径（如 /mcp）
+	Proto    string // 用户指定的协议（"http"/"https"），为空时由 FilterHTTP 按端口推断
 	Open     bool
 }
 
@@ -44,7 +45,7 @@ func ScanPorts(ctx context.Context, targets []target.Target, concurrency int, ti
 			open := tcpConnect(t.IP, t.Port, timeout)
 			if open {
 				mu.Lock()
-				results = append(results, PortResult{IP: t.IP, Port: t.Port, Hostname: t.Hostname, URLPath: t.URLPath, Open: true})
+				results = append(results, PortResult{IP: t.IP, Port: t.Port, Hostname: t.Hostname, URLPath: t.URLPath, Proto: t.Proto, Open: true})
 				mu.Unlock()
 			}
 		}(t)
