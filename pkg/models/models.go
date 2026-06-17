@@ -3,6 +3,8 @@ package models
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/agentscan/agentscan/pkg/config"
 )
 
 // Transport MCP 传输类型
@@ -75,13 +77,13 @@ type ScanConfig struct {
 	VerboseRaw       bool
 }
 
-// DefaultConfig 默认配置
+// DefaultConfig 默认配置（数值来自 pkg/config/config.go，统一在那里修改）
 func DefaultConfig() ScanConfig {
 	return ScanConfig{
-		Ports:            []int{80, 443, 8000, 8080, 8443, 3000, 3001, 4000, 5000, 9000},
-		Concurrency:      500,
-		TimeoutConnectMs: 500,
-		TimeoutHTTPMs:    5000,
-		TimeoutMCPMs:     10000,
+		Ports:            config.DefaultPorts,
+		Concurrency:      config.DefaultConcurrency,
+		TimeoutConnectMs: config.DefaultTimeoutConnectMs,
+		TimeoutHTTPMs:    config.DefaultTimeoutConnectMs * 10,
+		TimeoutMCPMs:     config.DefaultTimeoutConnectMs * 20,
 	}
 }

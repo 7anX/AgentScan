@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/agentscan/agentscan/pkg/config"
 )
 
 // HTTPCandidate HTTP 筛选结果
@@ -24,11 +26,8 @@ type HTTPCandidate struct {
 }
 
 // MCP 相关的 Server 头特征（来自 Bitsight 报告）
-var mcpServerHints = []string{
-	"uvicorn", "fastapi", "fastmcp",
-	"express", "fastify", "node",
-	"python", "gunicorn",
-}
+// 字典维护见 pkg/config/config.go → MCPServerHints
+var mcpServerHints = config.MCPServerHints
 
 // FilterHTTP 对开放端口做并发 HTTP 筛选，返回候选列表。
 // 全部纳入（高召回率），命中 MCP 特征的标记高优先级。
@@ -55,10 +54,10 @@ func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int) []HTTPCa
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			// 协议优先级：用户指定 > 端口推断（443/8443 → https，其余 → http）
+			// 协议优先级：用户指定 > 端口推断
 			proto := p.Proto
 			if proto == "" {
-				if p.Port == 443 || p.Port == 8443 {
+				if config.HTTPSPorts[p.Port] {
 					proto = "https"
 				} else {
 					proto = "http"
@@ -72,8 +71,9 @@ func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int) []HTTPCa
 			}
 			baseURL := fmt.Sprintf("%s://%s:%d", proto, host, p.Port)
 
-			// 构建 HTTP 客户端，支持 SNI
-			client := buildHTTPClient(p.Hostname, timeout)
+			// FilterHTTP 只需要判断服务器类型，用短超时（timeout）
+			// 不用 timeout*3，避免 scheme 误写时 TLS 握手超时拖慢整体进度
+			filterClient := buildHTTPClient(p.Hostname, timeout)
 
 			// 尝试 GET / 获取 Server 头做优先级标记
 			// 无论返回什么状态码（404/301/308），端口是开放的就纳入候选
@@ -84,7 +84,7 @@ func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int) []HTTPCa
 			connOK := false
 			if err == nil {
 				req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; agentscan/1.0)")
-				if resp, err2 := client.Do(req); err2 == nil {
+				if resp, err2 := filterClient.Do(req); err2 == nil {
 					connOK = true
 					server = strings.ToLower(resp.Header.Get("Server"))
 					ct = strings.ToLower(resp.Header.Get("Content-Type"))
@@ -114,7 +114,7 @@ func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int) []HTTPCa
 				altReq, err2 := http.NewRequestWithContext(ctx, "GET", altBaseURL+"/", nil)
 				if err2 == nil {
 					altReq.Header.Set("User-Agent", "Mozilla/5.0 (compatible; agentscan/1.0)")
-					if resp, err3 := client.Do(altReq); err3 == nil {
+					if resp, err3 := filterClient.Do(altReq); err3 == nil {
 						connOK = true
 						baseURL = altBaseURL // 切换到能用的协议
 						server = strings.ToLower(resp.Header.Get("Server"))

@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/agentscan/agentscan/internal/version"
+	"github.com/agentscan/agentscan/pkg/config"
 	"github.com/agentscan/agentscan/pkg/models"
 	"github.com/agentscan/agentscan/pkg/output"
 	"github.com/agentscan/agentscan/pkg/scanner"
@@ -50,18 +51,24 @@ func scanCommand() *cli.Command {
 			},
 			&cli.StringFlag{
 				Name:  "ports",
-				Value: "80,443,8000,8080,8443,3000,3001,4000,5000,9000",
+				Value: strings.Join(func() []string {
+					s := make([]string, len(config.DefaultPorts))
+					for i, p := range config.DefaultPorts {
+						s[i] = fmt.Sprintf("%d", p)
+					}
+					return s
+				}(), ","),
 				Usage: "Comma-separated port list",
 			},
 			&cli.IntFlag{
 				Name:    "threads",
 				Aliases: []string{"T"},
-				Value:   500,
+				Value:   config.DefaultConcurrency,
 				Usage:   "Max concurrent TCP connections",
 			},
 			&cli.IntFlag{
 				Name:  "timeout",
-				Value: 500,
+				Value: config.DefaultTimeoutConnectMs,
 				Usage: "TCP connect timeout (ms)",
 			},
 			&cli.BoolFlag{

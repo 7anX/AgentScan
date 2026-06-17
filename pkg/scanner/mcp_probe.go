@@ -11,40 +11,9 @@ import (
 	"time"
 
 	"github.com/agentscan/agentscan/internal/sseutil"
+	"github.com/agentscan/agentscan/pkg/config"
 	"github.com/agentscan/agentscan/pkg/models"
 )
-
-// MCP 端点尝试顺序（Streamable HTTP 优先）
-// T0: 官方规范推荐 / SDK 默认
-// T1: 框架挂载组合（FastAPI/Express 嵌套路由）
-// T2: 版本化 / 尾斜杠（Python Starlette 对尾斜杠敏感）
-// T3: 泛化 JSON-RPC 路径（低频，自研框架）
-var mcpEndpoints = []string{
-	// T0 - 核心
-	"/mcp",      // Streamable HTTP 官方推荐；FastMCP 默认
-	"/sse",      // 旧版 HTTP+SSE 核心 GET 端点；几乎所有兼容部署都保留
-	"/messages", // 旧版 POST 消息端点；Python/TS SDK 默认
-	"/message",  // C# SDK 硬编码默认；TS SDK 示例混用
-	"/",         // 部分极简部署直接挂根路径
-
-	// T1 - 框架挂载组合（/mcp 前缀最常见）
-	"/mcp/sse",      // MCP router 挂 /mcp 下，SSE 子路由
-	"/mcp/messages", // MCP router 挂 /mcp 下，消息子路由
-	"/mcp/message",  // 同上，单数变体
-	"/api/mcp",      // 企业级 RESTful 规范，统一放 /api 下
-	"/mcp-server",   // 多篇教程推荐的挂载前缀
-	"/mcp-server/sse", // 教程组合变体（FastAPI mount 示例）
-
-	// T2 - 版本化 / 尾斜杠
-	"/sse/",         // Python Starlette：不带尾斜杠会 307，带斜杠才命中
-	"/messages/",    // 同上，Python SDK 内部定义为 /messages/
-	"/v1/mcp",       // 对外公共服务带版本号
-	"/api/v1/mcp",   // 版本化 + API 前缀组合
-
-	// T3 - 泛化 JSON-RPC（低频）
-	"/jsonrpc",
-	"/rpc",
-}
 
 // MCP 特有 capabilities key（区别于 LSP）
 var mcpCapKeys = map[string]bool{
@@ -128,10 +97,10 @@ func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string
 	client := buildHTTPClient(hostname, timeout)
 
 	// 如果用户指定了具体路径（如 /mcp, /custom-mcp），优先尝试该路径
-	endpoints := mcpEndpoints
+	endpoints := config.MCPEndpoints
 	if urlPath != "" && urlPath != "/" {
 		deduped := []string{urlPath}
-		for _, ep := range mcpEndpoints {
+		for _, ep := range config.MCPEndpoints {
 			if ep != urlPath {
 				deduped = append(deduped, ep)
 			}
@@ -487,14 +456,7 @@ func isMCPAuthRequired(resp *http.Response, endpoint string) bool {
 	}
 
 	// 端点路径信号：已知 MCP 特征路径
-	mcpPaths := map[string]bool{
-		"/mcp": true, "/sse": true, "/messages": true, "/message": true,
-		"/mcp/sse": true, "/mcp/messages": true, "/mcp/message": true,
-		"/api/mcp": true, "/v1/mcp": true, "/api/v1/mcp": true,
-		"/mcp-server": true, "/mcp-server/sse": true,
-		"/sse/": true, "/messages/": true,
-	}
-	if mcpPaths[endpoint] {
+	if config.MCPAuthPaths[endpoint] {
 		score += 1
 	}
 
