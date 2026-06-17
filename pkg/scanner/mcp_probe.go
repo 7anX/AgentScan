@@ -300,9 +300,10 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL string, 
 	if err != nil {
 		return nil
 	}
-	// 读取 endpoint event 后立即排尽并关闭，防止 FD 泄漏
+	// 读取 endpoint event 后立即关闭。
+	// 不需要排尽剩余字节：client 设了 DisableKeepAlives=true，Close() 直接断开 TCP，
+	// 不会影响连接复用。对 chunked 长连接 SSE，跳过 io.Copy 可节省 ~3s 等待。
 	postPath := sseutil.ParseEndpointEvent(resp.Body)
-	io.Copy(io.Discard, io.LimitReader(resp.Body, 4096)) //nolint:errcheck
 	resp.Body.Close()
 
 	if postPath == "" {
@@ -487,12 +488,19 @@ func isMCPAuthRequired(resp *http.Response, endpoint string) bool {
 	// 响应体信号
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if err == nil && len(body) > 0 {
+		bodyStr := string(body)
+
+		// 400 + body 含 "session" → SSE legacy 的 session 错误（如 "No transport found for sessionId"、
+		// "Session not found"），不是认证拒绝，直接排除。
+		if code == 400 && strings.Contains(strings.ToLower(bodyStr), "session") {
+			return false
+		}
+
 		isJSONContentType := strings.Contains(
 			strings.ToLower(resp.Header.Get("Content-Type")), "application/json")
 		if isJSONContentType {
 			score += 1
 		}
-		bodyStr := string(body)
 		if strings.Contains(bodyStr, `"jsonrpc"`) {
 			score += 2
 		}
