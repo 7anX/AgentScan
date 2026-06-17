@@ -187,10 +187,10 @@ func newSSESession(ctx context.Context, baseURL, ssePath, hostname string, timeo
 	}
 
 	// consume any async initialize response from SSE stream (202 case)
+	// Loop until we find the message with id==1 to skip any server-initiated
+	// notifications that arrive before the initialize response.
 	if initResp.StatusCode == 202 {
-		select {
-		case <-msgCh: // discard initialize result
-		case <-sessCtx.Done():
+		if !drainUntilID(sessCtx, msgCh, 1) {
 			cancel()
 			return nil
 		}
@@ -206,6 +206,8 @@ func newSSESession(ctx context.Context, baseURL, ssePath, hostname string, timeo
 }
 
 // sseRequest sends a JSON-RPC request over an existing SSE session and returns the parsed response.
+// For 202 async responses it drains msgCh until a message with the matching id arrives,
+// discarding any server-initiated notifications (which have no "id") along the way.
 func sseRequest(sess *sseSession, id int, method string, params interface{}) map[string]interface{} {
 	body := mustMarshal(map[string]interface{}{
 		"jsonrpc": "2.0",
@@ -235,18 +237,59 @@ func sseRequest(sess *sseSession, id int, method string, params interface{}) map
 		json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&data) //nolint:errcheck
 		return data
 	case 202:
-		select {
-		case data := <-sess.msgCh:
-			return data
-		case <-sess.ctx.Done():
-			return nil
-		}
+		// Drain until we find the response whose id matches our request id.
+		// Notifications (no "id" field) and responses to other requests are skipped.
+		return drainForID(sess.ctx, sess.msgCh, id)
 	default:
 		return nil
 	}
 }
 
 // ── 内部：通用 helpers ────────────────────────────────────────────────────────
+
+// drainForID reads from msgCh until it finds a JSON-RPC message whose numeric "id"
+// matches wantID, discarding notifications (no "id") and other responses.
+// Returns nil on context cancellation or if msgCh is closed before a match is found.
+func drainForID(ctx context.Context, msgCh <-chan map[string]interface{}, wantID int) map[string]interface{} {
+	for {
+		select {
+		case msg, ok := <-msgCh:
+			if !ok {
+				return nil
+			}
+			if matchesID(msg, wantID) {
+				return msg
+			}
+			// notification or wrong id — discard and keep waiting
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
+// drainUntilID reads from msgCh until it finds a message with the given id,
+// returning true on success and false on timeout/close.
+func drainUntilID(ctx context.Context, msgCh <-chan map[string]interface{}, wantID int) bool {
+	return drainForID(ctx, msgCh, wantID) != nil
+}
+
+// matchesID reports whether msg has a numeric "id" field equal to wantID.
+// JSON-RPC notifications have no "id"; responses from other requests have different ids.
+func matchesID(msg map[string]interface{}, wantID int) bool {
+	v, ok := msg["id"]
+	if !ok {
+		return false // notification — no id field
+	}
+	switch id := v.(type) {
+	case float64:
+		return int(id) == wantID
+	case int:
+		return id == wantID
+	case int64:
+		return int(id) == wantID
+	}
+	return false
+}
 
 // resolvePostURL 计算实际 POST URL（messagePath 优先于 endpoint）
 func resolvePostURL(baseURL, endpoint, messagePath string) string {

@@ -1,4 +1,4 @@
-﻿package scanner
+package scanner
 
 import (
 	"context"
@@ -104,50 +104,50 @@ func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int) []HTTPCa
 				}
 			}
 
-		// 若连接失败，尝试备用协议：
-		// 1. 用户显式指定了 proto 但打错了 → 试另一个
-		// 2. proto 未指定（从端口推断为 http）但 HTTP 失败 → 补试 HTTPS
-		//    覆盖场景：8000/8080/3000 等非标准端口跑了 HTTPS
-		if !connOK {
-			var altProto string
-			if p.Proto != "" {
-				// 用户指定了协议但失败，试另一个
-				if proto == "http" {
+			// 若连接失败，尝试备用协议：
+			// 1. 用户显式指定了 proto 但打错了 → 试另一个
+			// 2. proto 未指定（从端口推断为 http）但 HTTP 失败 → 补试 HTTPS
+			//    覆盖场景：8000/8080/3000 等非标准端口跑了 HTTPS
+			if !connOK {
+				var altProto string
+				if p.Proto != "" {
+					// 用户指定了协议但失败，试另一个
+					if proto == "http" {
+						altProto = "https"
+					} else {
+						altProto = "http"
+					}
+				} else if proto == "http" {
+					// 推断为 http 但失败，补试 https
 					altProto = "https"
-				} else {
-					altProto = "http"
 				}
-			} else if proto == "http" {
-				// 推断为 http 但失败，补试 https
-				altProto = "https"
-			}
 
-			if altProto != "" {
-				altBaseURL := fmt.Sprintf("%s://%s:%d", altProto, host, p.Port)
-				altReq, err2 := http.NewRequestWithContext(ctx, "GET", altBaseURL+"/", nil)
-				if err2 == nil {
-					altReq.Header.Set("User-Agent", "Mozilla/5.0 (compatible; agentscan/1.0)")
-					if resp, err3 := filterClient.Do(altReq); err3 == nil {
-						connOK = true
-						baseURL = altBaseURL
-						server = strings.ToLower(resp.Header.Get("Server"))
-						ct = strings.ToLower(resp.Header.Get("Content-Type"))
-						resp.Body.Close()
+				if altProto != "" {
+					altBaseURL := fmt.Sprintf("%s://%s:%d", altProto, host, p.Port)
+					altReq, err2 := http.NewRequestWithContext(ctx, "GET", altBaseURL+"/", nil)
+					if err2 == nil {
+						altReq.Header.Set("User-Agent", "Mozilla/5.0 (compatible; agentscan/1.0)")
+						if resp, err3 := filterClient.Do(altReq); err3 == nil {
+							connOK = true
+							baseURL = altBaseURL
+							server = strings.ToLower(resp.Header.Get("Server"))
+							ct = strings.ToLower(resp.Header.Get("Content-Type"))
+							resp.Body.Close()
 
-						for _, hint := range mcpServerHints {
-							if strings.Contains(server, hint) {
-								priority = 2
-								break
+							for _, hint := range mcpServerHints {
+								if strings.Contains(server, hint) {
+									priority = 2
+									break
+								}
 							}
-						}
-						if priority == 0 && (strings.Contains(ct, "text/event-stream") || strings.Contains(ct, "application/json")) {
-							priority = 1
+							if priority == 0 && (strings.Contains(ct, "text/event-stream") || strings.Contains(ct, "application/json")) {
+								priority = 1
+							}
 						}
 					}
 				}
 			}
-		}
-		// GET / 失败（404/重定向/证书错误）→ priority=0，仍然纳入候选
+			// GET / 失败（404/重定向/证书错误）→ priority=0，仍然纳入候选
 
 			mu.Lock()
 			candidates = append(candidates, HTTPCandidate{

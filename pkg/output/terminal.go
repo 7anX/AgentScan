@@ -117,8 +117,8 @@ func PrintSummary(results []*models.MCPServer, noColor bool) {
 	fmt.Printf("  Unauthenticated : %d\n", noAuthCount)
 	fmt.Printf("  Auth-required   : %d\n", authRequired)
 	fmt.Printf("  Honeypots       : %d\n", honeypots)
-	fmt.Printf("Tools exposed     : %d\n", totalTools)
-	fmt.Printf("Resources exposed : %d\n", totalResources)
-	fmt.Printf("Res templates     : %d\n", totalResTemplates)
-	fmt.Printf("Prompts exposed   : %d\n", totalPrompts)
+	fmt.Printf("  Tools exposed   : %d\n", totalTools)
+	fmt.Printf("  Resources       : %d\n", totalResources)
+	fmt.Printf("  Res templates   : %d\n", totalResTemplates)
+	fmt.Printf("  Prompts         : %d\n", totalPrompts)
 }
