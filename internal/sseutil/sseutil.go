@@ -37,6 +37,8 @@ func ParseFirstMessage(r io.Reader) map[string]interface{} {
 
 // ParseEndpointEvent reads a legacy HTTP+SSE stream and returns the data value
 // of the first "endpoint" event (the POST URL path used by 2024-11-05 transport).
+// Handles both well-formed SSE (blank-line terminated) and truncated responses
+// where the server closes the connection without a trailing blank line.
 func ParseEndpointEvent(r io.Reader) string {
 	scanner := bufio.NewScanner(r)
 	var eventType, dataLine string
@@ -53,6 +55,10 @@ func ParseEndpointEvent(r io.Reader) string {
 			}
 			eventType, dataLine = "", ""
 		}
+	}
+	// EOF without trailing blank line: return whatever we have if it looks valid
+	if eventType == "endpoint" && dataLine != "" {
+		return dataLine
 	}
 	return ""
 }

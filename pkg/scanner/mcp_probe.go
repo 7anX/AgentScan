@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agentscan/agentscan/internal/sseutil"
@@ -126,7 +127,6 @@ func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string
 	// 如果用户指定了具体路径（如 /mcp, /custom-mcp），优先尝试该路径
 	endpoints := mcpEndpoints
 	if urlPath != "" && urlPath != "/" {
-		// 把用户指定路径放在最前面
 		deduped := []string{urlPath}
 		for _, ep := range mcpEndpoints {
 			if ep != urlPath {
@@ -136,30 +136,83 @@ func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string
 		endpoints = deduped
 	}
 
-	for _, endpoint := range endpoints {
-		url := baseURL + endpoint
+	// 并行探测所有端点，找到第一个无认证命中立即返回
+	// 使用可取消的 context：一旦找到结果，取消所有其他 goroutine
+	probeCtx, cancelAll := context.WithCancel(ctx)
+	defer cancelAll()
 
-		if r := tryStreamableHTTP(ctx, client, url, endpoint); r != nil {
-			r.Endpoint = endpoint
-			return r
-		}
+	type result struct {
+		r        *ProbeResult
+		priority int // 越小越优先（端点在列表中的位置）
+	}
 
-		if endpoint == "/sse" {
-			if r := tryHTTPSSELegacy(ctx, client, baseURL, timeout); r != nil {
-				r.Endpoint = "/sse"
-				return r
+	resultCh := make(chan result, len(endpoints)+len(endpoints)) // 留足缓冲
+	var wg sync.WaitGroup
+
+	for i, endpoint := range endpoints {
+		wg.Add(1)
+		go func(ep string, priority int) {
+			defer wg.Done()
+			url := baseURL + ep
+
+			r := tryStreamableHTTP(probeCtx, client, url, ep)
+			if r != nil {
+				r.Endpoint = ep
+				resultCh <- result{r, priority}
+				return
+			}
+
+			if ep == "/sse" {
+				if r := tryHTTPSSELegacy(probeCtx, client, baseURL, timeout); r != nil {
+					r.Endpoint = "/sse"
+					resultCh <- result{r, priority}
+				}
+			}
+		}(endpoint, i)
+	}
+
+	// 关闭 channel：所有 goroutine 完成后
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	// 收集结果：优先返回 no-auth，其次返回 auth-required
+	var bestNoAuth *ProbeResult
+	var bestNoAuthPriority = int(^uint(0) >> 1) // MaxInt
+	var bestAuthRequired *ProbeResult
+	var bestAuthPriority = int(^uint(0) >> 1)
+
+	for res := range resultCh {
+		if !res.r.AuthRequired {
+			if res.priority < bestNoAuthPriority {
+				bestNoAuth = res.r
+				bestNoAuthPriority = res.priority
+			}
+		} else {
+			if res.priority < bestAuthPriority {
+				bestAuthRequired = res.r
+				bestAuthPriority = res.priority
 			}
 		}
 	}
-	return nil
+
+	if bestNoAuth != nil {
+		return bestNoAuth
+	}
+	return bestAuthRequired
 }
 
 // tryStreamableHTTP POST /mcp 尝试 Streamable HTTP（2025-03-26+）
 // endpoint 参数用于辅助 auth-required 判断（/mcp、/sse 等 MCP 特征路径名）
 func tryStreamableHTTP(ctx context.Context, client *http.Client, url, endpoint string) *ProbeResult {
+	// 单个端点探测最多等 3 秒，避免 20 个端点串行时总超时爆炸
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
 	body := initializeRequest("2025-06-18")
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(probeCtx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil
 	}
@@ -230,8 +283,8 @@ func tryStreamableHTTP(ctx context.Context, client *http.Client, url, endpoint s
 
 // tryHTTPSSELegacy 旧版 HTTP+SSE（2024-11-05）
 func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL string, timeout time.Duration) *ProbeResult {
-	// Step 1: GET /sse，使用短超时子 ctx，确保 SSE 长连接被及时关闭
-	sseCtx, sseCancel := context.WithTimeout(ctx, 2*time.Second)
+	// Step 1: GET /sse，独立超时 3s，不依赖外层 ctx（并行探测时外层 ctx 可能已接近耗尽）
+	sseCtx, sseCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer sseCancel()
 
 	req, err := http.NewRequestWithContext(sseCtx, "GET", baseURL+"/sse", nil)
@@ -257,11 +310,14 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL string, 
 		return nil
 	}
 
-	// Step 2: POST 到 endpoint（session 在 URL Query 里，不在 Header 里）
+	// Step 2: POST 到 endpoint，独立 5s 超时
+	postCtx, postCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer postCancel()
+
 	postURL := baseURL + postPath
 	body := initializeRequest("2024-11-05")
 
-	req2, err := http.NewRequestWithContext(ctx, "POST", postURL, bytes.NewReader(body))
+	req2, err := http.NewRequestWithContext(postCtx, "POST", postURL, bytes.NewReader(body))
 	if err != nil {
 		return nil
 	}
@@ -286,8 +342,11 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL string, 
 	}
 
 	score, serverName, serverVer, protocolVer, caps := scoreFingerprint(data)
+	// result:null 或低分：这个服务器 initialize 响应不标准（常见于 Kong 等网关代理）。
+	// 但 Step 1 能拿到合法 endpoint event 本身就是强 MCP 特征（非 MCP 服务不会返回 SSE endpoint event）。
+	// 降级处理：最低给 0.4 分，确保能通过 pipeline 的 0.35 阈值。
 	if score < 0.35 {
-		return nil
+		score = 0.4
 	}
 
 	return &ProbeResult{
@@ -369,7 +428,14 @@ func marshalRaw(v interface{}) json.RawMessage {
 //   - 响应体含 "error" 字段：错误响应信号 +1
 //
 // 总分 ≥ 3 才认为是 auth-required MCP（防止单一信号误报）
+// 注意：406 Not Acceptable 是内容协商失败（Accept header 不匹配），不是认证错误，直接排除。
 func isMCPAuthRequired(resp *http.Response, endpoint string) bool {
+	// 406 = 内容协商失败，服务器可能只接受 text/event-stream。
+	// 这不是认证错误，调用方应该换参数重试，不应标记为 auth-required。
+	if resp.StatusCode == 406 {
+		return false
+	}
+
 	score := 0
 
 	// MCP 特有 header（最强信号）
