@@ -1,4 +1,4 @@
-﻿package scanner
+package scanner
 
 import (
 	"context"
@@ -70,7 +70,7 @@ func ScanPorts(ctx context.Context, targets []target.Target, concurrency int, ti
 }
 
 func tcpConnect(ip string, port int, timeout time.Duration) bool {
-	addr := fmt.Sprintf("%s:%d", ip, port)
+	addr := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
 	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return false
@@ -78,4 +78,3 @@ func tcpConnect(ip string, port int, timeout time.Duration) bool {
 	conn.Close()
 	return true
 }
-

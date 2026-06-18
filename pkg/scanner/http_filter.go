@@ -69,7 +69,7 @@ func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int) []HTTPCa
 			if p.Hostname != "" {
 				host = p.Hostname
 			}
-			baseURL := fmt.Sprintf("%s://%s:%d", proto, host, p.Port)
+			baseURL := fmt.Sprintf("%s://%s:%d", proto, hostForURL(host), p.Port)
 
 			// FilterHTTP 只需要判断服务器类型，用短超时（timeout）
 			// 不用 timeout*3，避免 scheme 误写时 TLS 握手超时拖慢整体进度
@@ -123,7 +123,7 @@ func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int) []HTTPCa
 				}
 
 				if altProto != "" {
-					altBaseURL := fmt.Sprintf("%s://%s:%d", altProto, host, p.Port)
+					altBaseURL := fmt.Sprintf("%s://%s:%d", altProto, hostForURL(host), p.Port)
 					altReq, err2 := http.NewRequestWithContext(ctx, "GET", altBaseURL+"/", nil)
 					if err2 == nil {
 						altReq.Header.Set("User-Agent", "Mozilla/5.0 (compatible; agentscan/1.0)")
@@ -166,6 +166,13 @@ func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int) []HTTPCa
 done:
 	wg.Wait()
 	return candidates
+}
+
+func hostForURL(host string) string {
+	if ip := net.ParseIP(host); ip != nil && strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+	return host
 }
 
 // buildHTTPClient 构建支持 SNI 的 HTTP 客户端

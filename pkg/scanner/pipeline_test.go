@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/agentscan/agentscan/pkg/models"
+	"github.com/agentscan/agentscan/pkg/target"
 )
 
 func TestProgressPercentDoesNotRoundIncompleteScanTo100(t *testing.T) {
@@ -22,5 +23,22 @@ func TestCandidateTimeoutDurationIsBounded(t *testing.T) {
 	}
 	if got := candidateTimeoutDuration(models.ScanConfig{TimeoutMCPMs: 40000, TimeoutHTTPMs: 20000}); got != 45*time.Second {
 		t.Fatalf("large timeout = %v, want 45s", got)
+	}
+}
+
+func TestDedupeTargetsKeepsHostnameAndProtoDistinct(t *testing.T) {
+	input := []target.Target{
+		{IP: "203.0.113.10", Port: 443, Hostname: "a.example", URLPath: "/mcp", Proto: "https"},
+		{IP: "203.0.113.10", Port: 443, Hostname: "b.example", URLPath: "/mcp", Proto: "https"},
+		{IP: "203.0.113.10", Port: 443, Hostname: "a.example", URLPath: "/mcp", Proto: "http"},
+		{IP: "203.0.113.10", Port: 443, Hostname: "a.example", URLPath: "/mcp", Proto: "https"},
+	}
+
+	got, dupCount := dedupeTargets(input)
+	if dupCount != 1 {
+		t.Fatalf("dupCount = %d, want 1", dupCount)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len(got) = %d, want 3: %#v", len(got), got)
 	}
 }

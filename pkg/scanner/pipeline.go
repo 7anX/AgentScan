@@ -345,23 +345,7 @@ func RunScan(ctx context.Context, rawTargets []string, filePath string,
 		return nil, fmt.Errorf("no valid targets")
 	}
 
-	// 去重：同一 IP:Port:URLPath 只扫一次。
-	// URLPath 必须参与 key：http://IP:8080/mcp 和 http://IP:8080/api/mcp 是不同扫描目标。
-	type ipPortPath struct {
-		ip      string
-		port    int
-		urlPath string
-	}
-	seen := make(map[ipPortPath]struct{}, len(targets))
-	deduped := make([]target.Target, 0, len(targets)) // 独立 slice，不共享底层数组
-	for _, t := range targets {
-		key := ipPortPath{t.IP, t.Port, t.URLPath}
-		if _, exists := seen[key]; !exists {
-			seen[key] = struct{}{}
-			deduped = append(deduped, t)
-		}
-	}
-	dupCount := len(targets) - len(deduped)
+	deduped, dupCount := dedupeTargets(targets)
 	targets = deduped
 
 	// 统计唯一主机数（精确，适用于混合输入：CIDR + host:port + 域名）
@@ -426,6 +410,34 @@ func RunScan(ctx context.Context, rawTargets []string, filePath string,
 	fmt.Fprintf(os.Stderr, "[*] HTML reports: %s\n", reportDir)
 
 	return results, nil
+}
+
+type targetKey struct {
+	ip       string
+	port     int
+	hostname string
+	urlPath  string
+	proto    string
+}
+
+func dedupeTargets(targets []target.Target) ([]target.Target, int) {
+	seen := make(map[targetKey]struct{}, len(targets))
+	deduped := make([]target.Target, 0, len(targets))
+	for _, t := range targets {
+		key := targetKey{
+			ip:       t.IP,
+			port:     t.Port,
+			hostname: t.Hostname,
+			urlPath:  t.URLPath,
+			proto:    t.Proto,
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		deduped = append(deduped, t)
+	}
+	return deduped, len(targets) - len(deduped)
 }
 
 func htmlReportBaseDir(outputPath string) string {
