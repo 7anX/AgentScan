@@ -154,6 +154,16 @@ func newSSESession(ctx context.Context, baseURL, ssePath, hostname string, timeo
 		return nil
 	}
 
+	// 反向代理路径前缀修正（与 tryHTTPSSELegacy 保持一致）：
+	// 服务器返回的 endpoint path 可能不含代理前缀。
+	// 例如 ssePath=/9da4ht4y/sse，返回 data: /messages/?session_id=xxx，
+	// 需补全为 /9da4ht4y/messages/?session_id=xxx。
+	resolvedPostPath := postPath
+	sseDir := ssePath[:strings.LastIndex(ssePath, "/")]
+	if sseDir != "" && !strings.HasPrefix(postPath, sseDir) {
+		resolvedPostPath = sseDir + postPath
+	}
+
 	// initialize
 	initBody := mustMarshal(map[string]interface{}{
 		"jsonrpc": "2.0",
@@ -165,7 +175,7 @@ func newSSESession(ctx context.Context, baseURL, ssePath, hostname string, timeo
 			"clientInfo":      map[string]interface{}{"name": "agentscan", "version": "1.0.0"},
 		},
 	})
-	postURL := baseURL + postPath
+	postURL := baseURL + resolvedPostPath
 	initReq, err := http.NewRequestWithContext(sessCtx, "POST", postURL, bytes.NewReader(initBody))
 	if err != nil {
 		cancel()

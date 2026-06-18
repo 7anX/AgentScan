@@ -261,8 +261,8 @@ func (p *Pipeline) analyzeCandidate(ctx context.Context, c HTTPCandidate) *model
 	server.Prompts = prompts
 	server.PromptCount = len(prompts)
 
-	// 蜜罐检测（传入 hostname 确保 HTTPS SNI 正确）
-	server.Honeypot = analysis.DetectHoneypot(ctx, server, c.Hostname, p.cfg.TimeoutHTTPMs)
+	// 蜜罐检测（传入 hostname 确保 HTTPS SNI 正确，传入 messagePath 支持 SSE legacy）
+	server.Honeypot = analysis.DetectHoneypot(ctx, server, c.Hostname, probe.MessagePath, p.cfg.TimeoutHTTPMs)
 
 	return server
 }

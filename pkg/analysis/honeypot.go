@@ -19,7 +19,9 @@ import (
 
 // DetectHoneypot 蜜罐检测（2个强信号）
 // hostname 用于 HTTPS SNI，为空时直接用 IP
-func DetectHoneypot(ctx context.Context, server *models.MCPServer, hostname string, timeoutMs int) models.HoneypotResult {
+// messagePath 仅 SSE legacy 有效：POST endpoint 路径（如 /prefix/messages/?session_id=xxx）；
+// 非空时代替 server.Endpoint 用于发探针，避免直接 POST 到 SSE GET 端点（会 405/400）。
+func DetectHoneypot(ctx context.Context, server *models.MCPServer, hostname, messagePath string, timeoutMs int) models.HoneypotResult {
 	timeout := time.Duration(timeoutMs) * time.Millisecond
 	client := newTLSClient(hostname, timeout)
 
@@ -27,6 +29,11 @@ func DetectHoneypot(ctx context.Context, server *models.MCPServer, hostname stri
 	var signals []string
 
 	probeURL := server.URL + server.Endpoint
+	// SSE legacy：Endpoint 是 GET 端点（/prefix/sse），不能直接 POST
+	// 用 messagePath（已解析的 POST 路径）替代
+	if messagePath != "" {
+		probeURL = server.URL + messagePath
+	}
 
 	// 信号1：发送非法版本
 	data, _ := sendInitProbe(ctx, client, probeURL, "9999-99-99")

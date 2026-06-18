@@ -80,7 +80,7 @@ func PrintHoneypot(s *models.MCPServer, noColor bool) {
 	PrintServer(s, noColor)
 }
 
-// PrintSummary 扫描完成后打印汇总
+// PrintSummary 扫描完成后打印汇总（按协议分行，为多协议扩展预留格式）
 func PrintSummary(results []*models.MCPServer, noColor bool) {
 	bold, reset := "", ""
 	if !noColor {
@@ -113,10 +113,16 @@ func PrintSummary(results []*models.MCPServer, noColor bool) {
 	}
 
 	fmt.Printf("\n%s=== AgentScan Summary ===%s\n", bold, reset)
-	fmt.Printf("MCP servers found : %d\n", total)
-	fmt.Printf("  Unauthenticated : %d\n", noAuthCount)
+	fmt.Printf("%-12s  %-8s  %-8s  %-9s\n", "Protocol", "Servers", "Unauth", "Honeypots")
+	fmt.Printf("%-12s  %-8s  %-8s  %-9s\n",
+		"────────────", "───────", "───────", "─────────")
+	fmt.Printf("%-12s  %-8d  %-8d  %-9d\n", "MCP", total, noAuthCount, honeypots)
+	// ponytail: placeholder row per protocol — expand when A2A/ACP land
+	fmt.Printf("%-12s  %-8s  %-8s  %-9s\n",
+		"────────────", "───────", "───────", "─────────")
+	fmt.Printf("%-12s  %-8d  %-8d  %-9d\n", "Total", total, noAuthCount, honeypots)
+	fmt.Printf("\n")
 	fmt.Printf("  Auth-required   : %d\n", authRequired)
-	fmt.Printf("  Honeypots       : %d\n", honeypots)
 	fmt.Printf("  Tools exposed   : %d\n", totalTools)
 	fmt.Printf("  Resources       : %d\n", totalResources)
 	fmt.Printf("  Res templates   : %d\n", totalResTemplates)

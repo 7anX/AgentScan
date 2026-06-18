@@ -134,7 +134,18 @@ func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string
 				return
 			}
 
-			if config.SSELegacyPaths[ep] {
+			// 判断是否应尝试 SSE legacy：
+			// 1. 固定路径表命中（/sse、/mcp/sse 等）
+			// 2. 路径以 /sse 或 /sse/ 结尾（兼容自定义前缀，如 /9da4ht4y/sse）
+			// 3. 以上都不满足时，做一次轻量 GET 探测：若响应 Content-Type 是
+			//    text/event-stream，则这是一个 SSE endpoint（路径名不含 "sse" 也能识别）
+			isSSEPath := config.SSELegacyPaths[ep] ||
+				strings.HasSuffix(ep, "/sse") ||
+				strings.HasSuffix(ep, "/sse/")
+			if !isSSEPath {
+				isSSEPath = isSSEEndpoint(probeCtx, client, url)
+			}
+			if isSSEPath {
 				if r := tryHTTPSSELegacy(probeCtx, client, baseURL, ep, timeout); r != nil {
 					r.Endpoint = ep
 					resultCh <- result{r, priority}
@@ -173,6 +184,25 @@ func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string
 		return bestNoAuth
 	}
 	return bestAuthRequired
+}
+
+// isSSEEndpoint 做一次轻量 GET 探测，判断 url 是否返回 text/event-stream。
+// 用于识别路径名不含 "sse" 关键词的 SSE endpoint（如 /abc123/ 或 /v2/stream）。
+// 只读响应头，不消费 body，超时 2s。
+func isSSEEndpoint(ctx context.Context, client *http.Client, url string) bool {
+	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(probeCtx, "GET", url, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")
 }
 
 // tryStreamableHTTP POST /mcp 尝试 Streamable HTTP（2025-03-26+）
@@ -226,6 +256,17 @@ func tryStreamableHTTP(ctx context.Context, client *http.Client, url, endpoint s
 	} else {
 		limitedBody := io.LimitReader(resp.Body, 1<<20) // 1MB
 		if err := json.NewDecoder(limitedBody).Decode(&data); err != nil {
+			// decode 失败，但如果有 MCP 专有响应头，说明服务存在（宁可误报不漏）
+			if resp.Header.Get("Mcp-Session-Id") != "" || resp.Header.Get("Mcp-Protocol-Version") != "" {
+				return &ProbeResult{
+					Transport:        models.TransportStreamableHTTP,
+					FingerprintScore: 0.4,
+					SessionID:        resp.Header.Get("Mcp-Session-Id"),
+					NoAuth:           true,
+					AuthRequired:     false,
+					ResponseTimeMs:   elapsed,
+				}
+			}
 			return nil
 		}
 	}
@@ -258,8 +299,9 @@ func tryStreamableHTTP(ctx context.Context, client *http.Client, url, endpoint s
 // 这是 SSE legacy 的核心协议要求：session 与连接绑定，断开连接即 session 失效。
 // ssePath 是实际的 SSE GET 路径（如 /sse、/mcp/sse、/mcp-server/sse、/sse/），不再硬编码。
 func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL, ssePath string, timeout time.Duration) *ProbeResult {
-	// 整个 SSE 会话使用独立超时，不依赖外层 ctx
-	sessCtx, sessCancel := context.WithTimeout(context.Background(), 8*time.Second)
+	// 整个 SSE 会话使用独立超时，不依赖外层 ctx。
+	// 12s：GET握手(~1s) + endpoint event(~1s) + POST(~1s) + SSE message回推(~3s) + 跨国链路余量
+	sessCtx, sessCancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer sessCancel()
 
 	// Step 1: 建立 SSE 连接并启动监听 goroutine
@@ -276,6 +318,16 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL, ssePath
 	defer sseResp.Body.Close()
 
 	if sseResp.StatusCode != 200 {
+		// SSE GET 被拒绝（401/403）→ 可能是需要认证的 SSE legacy 服务
+		if sseResp.StatusCode == 401 || sseResp.StatusCode == 403 {
+			io.Copy(io.Discard, io.LimitReader(sseResp.Body, 4096)) //nolint:errcheck
+			return &ProbeResult{
+				Transport:      models.TransportHTTPSSELegacy,
+				FingerprintScore: 0.5,
+				NoAuth:         false,
+				AuthRequired:   true,
+			}
+		}
 		return nil
 	}
 
@@ -300,7 +352,18 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL, ssePath
 	}
 
 	// Step 3: POST initialize（在 sessCtx 内，session 仍然有效）
-	postURL := baseURL + postPath
+	//
+	// 反向代理场景修正：服务器返回的 endpoint path 可能是不含代理前缀的绝对路径。
+	// 例如 SSE 路径为 /9da4ht4y/sse，服务器返回 data: /messages/?session_id=xxx，
+	// 此时直接拼 baseURL+postPath = host/messages/ 会 502。
+	// 修正：若 ssePath 有多层前缀（/prefix/sse），而 postPath 不以该前缀开头，
+	// 则尝试用 ssePath 的父目录前缀拼接。
+	resolvedPostPath := postPath
+	sseDir := ssePath[:strings.LastIndex(ssePath, "/")] // /9da4ht4y/sse → /9da4ht4y
+	if sseDir != "" && !strings.HasPrefix(postPath, sseDir) {
+		resolvedPostPath = sseDir + postPath // /9da4ht4y + /messages/?session_id=xxx
+	}
+	postURL := baseURL + resolvedPostPath
 	body := initializeRequest("2024-11-05")
 	postReq, err := http.NewRequestWithContext(sessCtx, "POST", postURL, bytes.NewReader(body))
 	if err != nil {
@@ -320,13 +383,13 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL, ssePath
 	case 200:
 		var data map[string]interface{}
 		if err := json.NewDecoder(io.LimitReader(postResp.Body, 1<<20)).Decode(&data); err != nil {
-			return sseProbeResult(postPath, elapsed, 0.4, "", "", "", nil, nil)
+			return sseProbeResult(resolvedPostPath, elapsed, 0.4, "", "", "", nil, nil)
 		}
 		score, serverName, serverVer, protocolVer, caps := scoreFingerprint(data)
 		if score < 0.35 {
 			score = 0.4
 		}
-		return sseProbeResult(postPath, elapsed, score, serverName, serverVer, protocolVer, caps, marshalRaw(data))
+		return sseProbeResult(resolvedPostPath, elapsed, score, serverName, serverVer, protocolVer, caps, marshalRaw(data))
 
 	case 202:
 		// 异步响应：从 SSE 流等待 message event
@@ -336,9 +399,9 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL, ssePath
 			if score < 0.35 {
 				score = 0.4
 			}
-			return sseProbeResult(postPath, elapsed, score, serverName, serverVer, protocolVer, caps, marshalRaw(data))
+			return sseProbeResult(resolvedPostPath, elapsed, score, serverName, serverVer, protocolVer, caps, marshalRaw(data))
 		case <-sessCtx.Done():
-			return sseProbeResult(postPath, elapsed, 0.4, "", "", "", nil, nil)
+			return sseProbeResult(resolvedPostPath, elapsed, 0.4, "", "", "", nil, nil)
 		}
 
 	default:
@@ -365,10 +428,20 @@ func sseProbeResult(postPath string, elapsed, score float64, serverName, serverV
 // scoreFingerprint 三层指纹打分
 // 实际最大分：protocolVersion(0.2) + capKey(0.3) + serverName(0.1) = 0.6
 // 注：L3（ping/notifications）在 ProbeMCP 外层补充，满分 1.0
-// 当前阈值 0.35 可匹配 protocolVersion+capKey 的服务器（得分0.5）
+// 阈值策略（宁可误报，不要漏）：
+//   - 0.35 正常门槛
+//   - 例外1：protocolVersion + serverInfo.name 同时存在 → 两个规范 REQUIRED 字段，强制 0.35
+//   - 例外2：响应是 JSON-RPC 错误格式（有 "error" 无 "result"）→ 服务存在的证据，给 0.2 基础分
 func scoreFingerprint(data map[string]interface{}) (float64, string, string, string, map[string]interface{}) {
 	result, ok := data["result"].(map[string]interface{})
 	if !ok {
+		// 没有 result 字段，但如果是 JSON-RPC error 响应，说明服务存在
+		// 给 0.2 分（低于阈值，由调用方决定是否兜底）
+		if _, hasErr := data["error"]; hasErr {
+			if v, _ := data["jsonrpc"].(string); v == "2.0" {
+				return 0.2, "", "", "", nil
+			}
+		}
 		return 0, "", "", "", nil
 	}
 
@@ -405,6 +478,12 @@ func scoreFingerprint(data map[string]interface{}) (float64, string, string, str
 		}
 	}
 
+	// protocolVersion + serverInfo.name 同时存在 → 两个 MCP 规范 REQUIRED 字段齐全，
+	// 即便 capabilities 为空（合法）也应确认为 MCP，强制达到阈值。
+	if protocolVer != "" && serverName != "" && score < 0.35 {
+		score = 0.35
+	}
+
 	return score, serverName, serverVer, protocolVer, caps
 }
 // InitializeRequest returns a pre-built MCP initialize request body for the given protocol version.
@@ -419,15 +498,15 @@ func marshalRaw(v interface{}) json.RawMessage {
 }
 
 // isMCPAuthRequired 判断 4xx 响应是否来自需要认证的 MCP 服务器。
-// 综合多个信号打分，避免普通 Web 应用误报：
+// 综合多个信号打分，宁可误报不漏报：
 //   - MCP 特有响应头（MCP-Protocol-Version / MCP-Session-Id）：强信号 +2
-//   - 状态码 401/403，或 400+WWW-Authenticate：认证拒绝信号 +1
+//   - 状态码 401/403，或 400 且带 WWW-Authenticate：认证拒绝信号 +1
 //   - 端点路径是 /mcp 或 /sse 等 MCP 特征路径：路径信号 +1
 //   - 响应体 Content-Type 是 application/json：JSON API 信号 +1
 //   - 响应体含 "jsonrpc" 字段：JSON-RPC 信号 +2
 //   - 响应体含 "error" 字段：错误响应信号 +1
 //
-// 总分 ≥ 3 才认为是 auth-required MCP（防止单一信号误报）
+// 总分 ≥ 2 即认为是 auth-required MCP（401/403 + MCP路径就足够，宁可误报不漏）
 // 排除的状态码：
 //   - 406 Not Acceptable：内容协商失败，不是认证错误
 //   - 404 Not Found：资源不存在（SSE legacy 无 session 的 /messages 返回 404，
@@ -485,5 +564,5 @@ func isMCPAuthRequired(resp *http.Response, endpoint string) bool {
 		}
 	}
 
-	return score >= 3
+	return score >= 2
 }

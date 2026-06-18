@@ -19,9 +19,10 @@ import (
 func main() {
 	app := &cli.App{
 		Name:    "agentscan",
-		Usage:   "MCP exposure surface scanner",
+		Usage:   "AI agent protocol exposure scanner",
 		Version: version.Version,
 		Commands: []*cli.Command{
+			mcpCommand(),
 			scanCommand(),
 		},
 	}
@@ -32,130 +33,164 @@ func main() {
 	}
 }
 
-func scanCommand() *cli.Command {
-	return &cli.Command{
-		Name:                   "scan",
-		Usage:                  "Scan targets for exposed MCP servers",
-		ArgsUsage:              "[TARGET...]",
-		UseShortOptionHandling: true,
-		Flags: []cli.Flag{
-			&cli.StringSliceFlag{
-				Name:    "target",
-				Aliases: []string{"t"},
-				Usage:   "Target(s): IP, CIDR, IP range (1.1.1.1-2.2.2.2), domain, host:port, URL. Repeatable.",
-			},
-			&cli.StringFlag{
-				Name:    "file",
-				Aliases: []string{"f"},
-				Usage:   "File with targets (one per line, # comments supported)",
-			},
-			&cli.StringFlag{
-				Name:  "ports",
-				Value: strings.Join(func() []string {
-					s := make([]string, len(config.DefaultPorts))
-					for i, p := range config.DefaultPorts {
-						s[i] = fmt.Sprintf("%d", p)
-					}
-					return s
-				}(), ","),
-				Usage: "Comma-separated port list",
-			},
-			&cli.IntFlag{
-				Name:    "threads",
-				Aliases: []string{"T"},
-				Value:   config.DefaultConcurrency,
-				Usage:   "Max concurrent TCP connections",
-			},
-			&cli.IntFlag{
-				Name:  "timeout",
-				Value: config.DefaultTimeoutConnectMs,
-				Usage: "TCP connect timeout (ms)",
-			},
-			&cli.BoolFlag{
-				Name:  "exclude-honeypots",
-				Usage: "Exclude suspected honeypots from results",
-			},
-			&cli.StringFlag{
-				Name:    "output",
-				Aliases: []string{"o"},
-				Usage:   "JSON output file path",
-			},
-			&cli.StringFlag{
-				Name:  "format",
-				Value: "terminal",
-				Usage: "Output format: terminal|json",
-			},
-			&cli.BoolFlag{
-				Name:  "verbose-raw",
-				Usage: "Include raw initialize response in JSON output",
-			},
-			&cli.IntFlag{
-				Name:  "mcp-threads",
-				Value: 50,
-				Usage: "Max concurrent MCP probe connections (default 50; raise for large batches)",
-			},
-			&cli.BoolFlag{
-				Name:  "skip-port-scan",
-				Usage: "Skip TCP port scan; treat all inputs as open IP:Port (use when feeding masscan/nmap results)",
-			},
-			&cli.BoolFlag{
-				Name:    "verbose",
-				Aliases: []string{"v"},
-				Usage:   "Verbose logging: show each open port, current probe target, and response time",
-			},
-			&cli.BoolFlag{
-				Name:  "no-color",
-				Aliases: []string{"Cn"},
-				Usage: "Disable colored output",
-			},
+// commonFlags returns the flags shared across all protocol subcommands.
+func commonFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringSliceFlag{
+			Name:    "target",
+			Aliases: []string{"t"},
+			Usage:   "Target(s): IP, CIDR, IP range (1.1.1.1-2.2.2.2), domain, host:port, URL. Repeatable.",
 		},
-		Action: func(c *cli.Context) error {
-			// 合并所有目标来源：-t flag + positional args（过滤掉被误识别的 flag）
-			rawTargets := append(c.StringSlice("target"), filterNonFlags(c.Args().Slice())...)
-
-			cfg := models.DefaultConfig()
-			cfg.Concurrency = c.Int("threads")
-			cfg.TimeoutConnectMs = c.Int("timeout")
-			cfg.TimeoutHTTPMs = cfg.TimeoutConnectMs * 10
-			cfg.TimeoutMCPMs = cfg.TimeoutConnectMs * 20
-			cfg.ExcludeHoneypots = c.Bool("exclude-honeypots")
-			cfg.Ports = parsePorts(c.String("ports"))
-			cfg.VerboseRaw = c.Bool("verbose-raw")
-			cfg.Verbose = c.Bool("verbose")
-			cfg.MCPConcurrency = c.Int("mcp-threads")
-			cfg.SkipPortScan = c.Bool("skip-port-scan")
-
-			noColor := c.Bool("no-color") || hasArgAnywhere("--no-color") || hasArgAnywhere("-Cn") || output.NoColorEnabled()
-
-			// 对于在 positional arg 后面的 valued flag，urfave/cli 无法解析，
-			// 优先从 os.Args 直接读取，覆盖 urfave/cli 的默认值
-			format := getArgValue("--format")
-			if format == "" {
-				format = c.String("format") // urfave/cli 解析到的（可能是默认值 "terminal"）
-			}
-			outputPath := getArgValue("--output")
-			if outputPath == "" {
-				outputPath = getArgValue("-o")
-			}
-			if outputPath == "" {
-				outputPath = c.String("output")
-			}
-
-			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-			defer cancel()
-
-			_, err := scanner.RunScan(
-				ctx,
-				rawTargets,
-				c.String("file"),
-				cfg,
-				outputPath,
-				format,
-				noColor,
-			)
-			return err
+		&cli.StringFlag{
+			Name:    "file",
+			Aliases: []string{"f"},
+			Usage:   "File with targets (one per line, # comments supported)",
+		},
+		&cli.StringFlag{
+			Name: "ports",
+			Value: strings.Join(func() []string {
+				s := make([]string, len(config.DefaultPorts))
+				for i, p := range config.DefaultPorts {
+					s[i] = fmt.Sprintf("%d", p)
+				}
+				return s
+			}(), ","),
+			Usage: "Comma-separated port list",
+		},
+		&cli.IntFlag{
+			Name:    "threads",
+			Aliases: []string{"T"},
+			Value:   config.DefaultConcurrency,
+			Usage:   "Max concurrent TCP connections",
+		},
+		&cli.IntFlag{
+			Name:  "timeout",
+			Value: config.DefaultTimeoutConnectMs,
+			Usage: "TCP connect timeout (ms)",
+		},
+		&cli.BoolFlag{
+			Name:  "skip-port-scan",
+			Usage: "Skip TCP port scan; treat all inputs as open IP:Port (use when feeding masscan/nmap results)",
+		},
+		&cli.StringFlag{
+			Name:    "output",
+			Aliases: []string{"o"},
+			Usage:   "JSON output file path",
+		},
+		&cli.StringFlag{
+			Name:  "format",
+			Value: "terminal",
+			Usage: "Output format: terminal|json",
+		},
+		&cli.BoolFlag{
+			Name:    "verbose",
+			Aliases: []string{"v"},
+			Usage:   "Verbose logging: show each open port, current probe target, and response time",
+		},
+		&cli.BoolFlag{
+			Name:  "no-color",
+			Aliases: []string{"Cn"},
+			Usage: "Disable colored output",
 		},
 	}
+}
+
+func mcpCommand() *cli.Command {
+	flags := append(commonFlags(),
+		&cli.BoolFlag{
+			Name:  "exclude-honeypots",
+			Usage: "Exclude suspected honeypots from results",
+		},
+		&cli.BoolFlag{
+			Name:  "verbose-raw",
+			Usage: "Include raw initialize response in JSON output",
+		},
+		&cli.IntFlag{
+			Name:  "mcp-threads",
+			Value: 50,
+			Usage: "Max concurrent MCP probe connections (default 50; raise for large batches)",
+		},
+	)
+	return &cli.Command{
+		Name:                   "mcp",
+		Usage:                  "Scan targets for exposed MCP (Model Context Protocol) servers",
+		ArgsUsage:              "[TARGET...]",
+		UseShortOptionHandling: true,
+		Flags:                  flags,
+		Action:                 runAction,
+	}
+}
+
+func scanCommand() *cli.Command {
+	flags := append(commonFlags(),
+		&cli.BoolFlag{
+			Name:  "exclude-honeypots",
+			Usage: "Exclude suspected honeypots from results",
+		},
+		&cli.BoolFlag{
+			Name:  "verbose-raw",
+			Usage: "Include raw initialize response in JSON output",
+		},
+		&cli.IntFlag{
+			Name:  "mcp-threads",
+			Value: 50,
+			Usage: "Max concurrent MCP probe connections (default 50; raise for large batches)",
+		},
+	)
+	return &cli.Command{
+		Name:                   "scan",
+		Usage:                  "Scan targets for all supported protocols (currently: MCP)",
+		ArgsUsage:              "[TARGET...]",
+		UseShortOptionHandling: true,
+		Flags:                  flags,
+		Action:                 runAction,
+	}
+}
+
+func runAction(c *cli.Context) error {
+	rawTargets := append(c.StringSlice("target"), filterNonFlags(c.Args().Slice())...)
+
+	cfg := models.DefaultConfig()
+	cfg.Concurrency = c.Int("threads")
+	cfg.TimeoutConnectMs = c.Int("timeout")
+	cfg.TimeoutHTTPMs = cfg.TimeoutConnectMs * 10
+	cfg.TimeoutMCPMs = cfg.TimeoutConnectMs * 20
+	cfg.ExcludeHoneypots = c.Bool("exclude-honeypots")
+	cfg.Ports = parsePorts(c.String("ports"))
+	cfg.VerboseRaw = c.Bool("verbose-raw")
+	cfg.Verbose = c.Bool("verbose")
+	cfg.MCPConcurrency = c.Int("mcp-threads")
+	cfg.SkipPortScan = c.Bool("skip-port-scan")
+
+	noColor := c.Bool("no-color") || hasArgAnywhere("--no-color") || hasArgAnywhere("-Cn") || output.NoColorEnabled()
+
+	// 对于在 positional arg 后面的 valued flag，urfave/cli 无法解析，
+	// 优先从 os.Args 直接读取，覆盖 urfave/cli 的默认值
+	format := getArgValue("--format")
+	if format == "" {
+		format = c.String("format")
+	}
+	outputPath := getArgValue("--output")
+	if outputPath == "" {
+		outputPath = getArgValue("-o")
+	}
+	if outputPath == "" {
+		outputPath = c.String("output")
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	_, err := scanner.RunScan(
+		ctx,
+		rawTargets,
+		c.String("file"),
+		cfg,
+		outputPath,
+		format,
+		noColor,
+	)
+	return err
 }
 
 func parsePorts(s string) []int {
@@ -207,6 +242,7 @@ func filterNonFlags(args []string) []string {
 		"--output": true, "-o": true,
 		"--format": true,
 		"--target": true, "-t": true,
+		"--mcp-threads": true,
 	}
 	for _, arg := range args {
 		if skipNext {
