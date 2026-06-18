@@ -96,17 +96,7 @@ func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string
 	timeout := time.Duration(timeoutMs) * time.Millisecond
 	client := buildHTTPClient(hostname, timeout)
 
-	// 如果用户指定了具体路径（如 /mcp, /custom-mcp），优先尝试该路径
-	endpoints := config.MCPEndpoints
-	if urlPath != "" && urlPath != "/" {
-		deduped := []string{urlPath}
-		for _, ep := range config.MCPEndpoints {
-			if ep != urlPath {
-				deduped = append(deduped, ep)
-			}
-		}
-		endpoints = deduped
-	}
+	endpoints := buildProbeEndpoints(urlPath)
 
 	// 并行探测所有端点，找到第一个无认证命中立即返回
 	// 使用可取消的 context：一旦找到结果，取消所有其他 goroutine
@@ -199,6 +189,72 @@ func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string
 		return bestNoAuth
 	}
 	return bestAuthRequired
+}
+
+func buildProbeEndpoints(urlPath string) []string {
+	if urlPath == "" || urlPath == "/" {
+		return config.MCPEndpoints
+	}
+
+	seen := make(map[string]struct{}, len(config.MCPEndpoints)*2)
+	endpoints := make([]string, 0, len(config.MCPEndpoints)*2)
+	add := func(ep string) {
+		ep = normalizeProbeEndpoint(ep)
+		if ep == "" {
+			return
+		}
+		if _, ok := seen[ep]; ok {
+			return
+		}
+		seen[ep] = struct{}{}
+		endpoints = append(endpoints, ep)
+	}
+
+	normalized := normalizeProbeEndpoint(urlPath)
+	add(normalized)
+
+	if shouldExpandMountPrefix(urlPath) {
+		prefix := strings.TrimRight(normalized, "/")
+		for _, ep := range config.MCPEndpoints {
+			if ep == "/" {
+				add(prefix)
+				continue
+			}
+			add(prefix + "/" + strings.TrimLeft(ep, "/"))
+		}
+	}
+
+	for _, ep := range config.MCPEndpoints {
+		add(ep)
+	}
+	return endpoints
+}
+
+func normalizeProbeEndpoint(ep string) string {
+	ep = strings.TrimSpace(ep)
+	if ep == "" {
+		return ""
+	}
+	if !strings.HasPrefix(ep, "/") {
+		ep = "/" + ep
+	}
+	return ep
+}
+
+func shouldExpandMountPrefix(urlPath string) bool {
+	if strings.HasSuffix(urlPath, "/") {
+		return true
+	}
+	last := urlPath
+	if i := strings.LastIndex(last, "/"); i >= 0 {
+		last = last[i+1:]
+	}
+	switch strings.ToLower(last) {
+	case "mcp", "sse", "message", "messages", "health", "server-card.json":
+		return false
+	default:
+		return true
+	}
 }
 
 // isSSEEndpoint 做一次轻量 GET 探测，判断 url 是否返回 text/event-stream。

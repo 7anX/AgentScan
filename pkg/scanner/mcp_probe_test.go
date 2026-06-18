@@ -5,9 +5,65 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 )
+
+func TestBuildProbeEndpointsExpandsMountPrefix(t *testing.T) {
+	got := buildProbeEndpoints("/9da4ht4y/")
+	wantPrefix := []string{
+		"/9da4ht4y/",
+		"/9da4ht4y/mcp",
+		"/9da4ht4y/sse",
+	}
+	if len(got) < len(wantPrefix) || !reflect.DeepEqual(got[:len(wantPrefix)], wantPrefix) {
+		t.Fatalf("buildProbeEndpoints prefix = %v, want prefix %v", got[:min(len(got), len(wantPrefix))], wantPrefix)
+	}
+}
+
+func TestBuildProbeEndpointsDoesNotExpandKnownEndpoint(t *testing.T) {
+	got := buildProbeEndpoints("/mcp")
+	mcpSSECount := 0
+	for _, ep := range got {
+		if ep == "/mcp/mcp" {
+			t.Fatalf("buildProbeEndpoints(/mcp) unexpectedly expanded concrete endpoint: %v", got)
+		}
+		if ep == "/mcp/sse" {
+			mcpSSECount++
+		}
+	}
+	if got[0] != "/mcp" {
+		t.Fatalf("first endpoint = %q, want /mcp", got[0])
+	}
+	if mcpSSECount != 1 {
+		t.Fatalf("/mcp/sse count = %d, want 1 in %v", mcpSSECount, got)
+	}
+}
+
+func TestProbeMCPWithHostnameFindsSSEUnderMountPrefix(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/prefix/sse" && r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","error":{"code":-32001,"message":"unauthorized"}}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	got := ProbeMCPWithHostname(context.Background(), server.URL, "", "/prefix/", 1000)
+	if got == nil {
+		t.Fatal("ProbeMCPWithHostname() returned nil, want auth-required SSE result")
+	}
+	if got.Endpoint != "/prefix/sse" {
+		t.Fatalf("Endpoint = %q, want /prefix/sse", got.Endpoint)
+	}
+	if !got.AuthRequired {
+		t.Fatalf("AuthRequired = false, want true: %#v", got)
+	}
+}
 
 func TestTryHTTPSSELegacyRejectsEmptyJSONRPCResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
