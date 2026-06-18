@@ -49,7 +49,9 @@ func Parse(input string, ports []int) ([]Target, error) {
 		}
 		ts := buildTargetsWithHostname(ips, ports, explicitPort, hostname)
 		for i := range ts {
-			ts[i].Proto = proto
+			if explicitPort > 0 {
+				ts[i].Proto = proto
+			}
 			if urlPath != "" && urlPath != "/" {
 				ts[i].URLPath = urlPath
 			}
@@ -253,7 +255,6 @@ func ipv4ToU32(ip net.IP) uint32 {
 func u32ToIPv4(n uint32) net.IP {
 	return net.IP{byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)}
 }
-
 
 func resolveHost(host string) ([]string, error) {
 	if ip := net.ParseIP(host); ip != nil {
