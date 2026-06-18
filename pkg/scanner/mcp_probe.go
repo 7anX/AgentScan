@@ -398,11 +398,11 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL, ssePath
 	case 200:
 		var data map[string]interface{}
 		if err := json.NewDecoder(io.LimitReader(postResp.Body, 1<<20)).Decode(&data); err != nil {
-			return sseProbeResult(resolvedPostPath, elapsed, 0.4, "", "", "", nil, nil)
+			return nil
 		}
 		score, serverName, serverVer, protocolVer, caps := scoreFingerprint(data)
 		if score < 0.35 {
-			score = 0.4
+			return nil
 		}
 		return sseProbeResult(resolvedPostPath, elapsed, score, serverName, serverVer, protocolVer, caps, marshalRaw(data))
 
@@ -412,11 +412,11 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL, ssePath
 		case data := <-msgCh:
 			score, serverName, serverVer, protocolVer, caps := scoreFingerprint(data)
 			if score < 0.35 {
-				score = 0.4
+				return nil
 			}
 			return sseProbeResult(resolvedPostPath, elapsed, score, serverName, serverVer, protocolVer, caps, marshalRaw(data))
 		case <-sessCtx.Done():
-			return sseProbeResult(resolvedPostPath, elapsed, 0.4, "", "", "", nil, nil)
+			return nil
 		}
 
 	default:
@@ -526,7 +526,7 @@ func marshalRaw(v interface{}) json.RawMessage {
 // 排除的状态码：
 //   - 406 Not Acceptable：内容协商失败，不是认证错误
 //   - 404 Not Found：资源不存在（SSE legacy 无 session 的 /messages 返回 404，
-//                   是正常业务逻辑，不是认证拒绝）
+//     是正常业务逻辑，不是认证拒绝）
 func isMCPAuthRequired(resp *http.Response, endpoint string) bool {
 	switch resp.StatusCode {
 	case 406:
