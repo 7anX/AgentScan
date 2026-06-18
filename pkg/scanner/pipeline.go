@@ -63,7 +63,7 @@ func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.M
 	// Stage 1: 端口扫描（--skip-port-scan 时跳过，所有输入视为已开放）
 	var portResults []PortResult
 	if p.cfg.SkipPortScan {
-		fmt.Fprintf(os.Stderr, "[*] Stage 1/3  TCP port scan: SKIPPED (--skip-port-scan)\n")
+		fmt.Fprintf(os.Stderr, "[1/3] port scan    SKIPPED (--skip-port-scan)\n\n")
 		portResults = make([]PortResult, 0, len(targets))
 		for _, t := range targets {
 			portResults = append(portResults, PortResult{
@@ -75,34 +75,26 @@ func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.M
 		portResults = ScanPorts(ctx, targets, p.cfg.Concurrency, p.cfg.TimeoutConnectMs, p.cfg.Verbose)
 	}
 	if len(portResults) == 0 {
-		fmt.Fprintf(os.Stderr, "[!] No open ports found, exiting.\n")
+		fmt.Fprintf(os.Stderr, "      no open ports found\n\n")
 		return nil
 	}
 
-	// Stage 3: HTTP 筛选（并发）
-	fmt.Fprintf(os.Stderr, "[*] Stage 2/3  HTTP filter: checking %d open ports (timeout=%dms)\n",
-		len(portResults), p.cfg.TimeoutHTTPMs)
+	// Stage 2: HTTP 筛选
+	fmt.Fprintf(os.Stderr, "[2/3] http filter  %d ports\n", len(portResults))
 	candidates := FilterHTTP(ctx, portResults, p.cfg.TimeoutHTTPMs)
 	if len(candidates) == 0 {
-		fmt.Fprintf(os.Stderr, "[!] No HTTP services found, exiting.\n")
+		fmt.Fprintf(os.Stderr, "      no HTTP services found\n\n")
 		return nil
 	}
-	fmt.Fprintf(os.Stderr, "[*] Stage 2/3  HTTP filter done: %d HTTP candidates\n", len(candidates))
+	fmt.Fprintf(os.Stderr, "      %d candidates\n\n", len(candidates))
 
 	total := int64(len(candidates))
 	var done atomic.Int64
 	var displayMu sync.Mutex
 
-	// 进度打印 goroutine：每秒在 stderr 打印一次进度（含当前目标）
-	type probeStatus struct {
-		mu      sync.Mutex
-		current string
-	}
-	var ps probeStatus
-
 	stopProgress := make(chan struct{})
 	var progressWG sync.WaitGroup
-	fmt.Fprintf(os.Stderr, "[*] Stage 3/3  MCP probe: %d candidates\n", len(candidates))
+	fmt.Fprintf(os.Stderr, "[3/3] mcp probe    %d candidates\n", len(candidates))
 	progressWG.Add(1)
 	go func() {
 		defer progressWG.Done()
@@ -112,21 +104,12 @@ func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.M
 			select {
 			case <-ticker.C:
 				n := done.Load()
-				ps.mu.Lock()
-				cur := ps.current
-				ps.mu.Unlock()
 				displayMu.Lock()
-				if cur != "" {
-					fmt.Fprintf(os.Stderr, "\r[*] Probing MCP: %d/%d (%d%%)  -> %-40s",
-						n, total, progressPercent(n, total), cur)
-				} else {
-					fmt.Fprintf(os.Stderr, "\r[*] Probing MCP: %d/%d (%d%%)   ",
-						n, total, progressPercent(n, total))
-				}
+				fmt.Fprintf(os.Stderr, "\r      probing %d/%d ...", n, total)
 				displayMu.Unlock()
 			case <-stopProgress:
 				displayMu.Lock()
-				fmt.Fprintf(os.Stderr, "\r[*] Probing MCP: %d/%d done%s\n", total, total, "            ")
+				fmt.Fprintf(os.Stderr, "\r%s\r", strings.Repeat(" ", 40))
 				displayMu.Unlock()
 				return
 			case <-ctx.Done():
@@ -160,38 +143,9 @@ func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.M
 			defer func() { <-sem }()
 			defer done.Add(1)
 
-			// 更新当前探测目标
-			label := fmt.Sprintf("%s:%d", c.IP, c.Port)
-			if c.Hostname != "" {
-				label = fmt.Sprintf("%s:%d", c.Hostname, c.Port)
-			}
-			ps.mu.Lock()
-			ps.current = label
-			ps.mu.Unlock()
-
-			var t0 time.Time
-			if p.cfg.Verbose {
-				t0 = time.Now()
-				displayMu.Lock()
-				fmt.Fprintf(os.Stderr, "\n  [PROBE] %s%s\n", c.BaseURL, c.URLPath)
-				displayMu.Unlock()
-			}
-
 			candidateCtx, cancelCandidate := context.WithTimeout(ctx, candidateTimeoutDuration(p.cfg))
 			server := p.analyzeCandidate(candidateCtx, c)
 			cancelCandidate()
-
-			if p.cfg.Verbose {
-				elapsed := time.Since(t0)
-				displayMu.Lock()
-				if server != nil {
-					fmt.Fprintf(os.Stderr, "  [HIT]   %-35s  server=%q  tools=%d  (%dms)\n",
-						label, server.ServerName, server.ToolCount, elapsed.Milliseconds())
-				} else {
-					fmt.Fprintf(os.Stderr, "  [MISS]  %-35s  (%dms)\n", label, elapsed.Milliseconds())
-				}
-				displayMu.Unlock()
-			}
 
 			if server == nil {
 				return
@@ -207,7 +161,7 @@ func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.M
 
 			if p.onFound != nil {
 				displayMu.Lock()
-				clearProgressLine()
+				fmt.Fprintf(os.Stderr, "\r%s\r", strings.Repeat(" ", 40))
 				p.onFound(server)
 				displayMu.Unlock()
 			}
@@ -218,7 +172,7 @@ done:
 	close(stopProgress)
 	progressWG.Wait()
 
-	fmt.Fprintf(os.Stderr, "[*] Stage 3/3  MCP probe done: %d confirmed MCP servers\n", len(results))
+	fmt.Fprintf(os.Stderr, "      %d confirmed\n\n", len(results))
 
 	// 按 FingerprintScore 从高到低排序
 	sort.Slice(results, func(i, j int) bool {
@@ -356,26 +310,41 @@ func RunScan(ctx context.Context, rawTargets []string, filePath string,
 	hostCount := len(hostSet)
 
 	if dupCount > 0 {
-		fmt.Fprintf(os.Stderr, "[*] Deduplicated %d duplicate targets\n", dupCount)
+		fmt.Fprintf(os.Stderr, "           dedup: -%d  ->  %d targets\n", dupCount, len(targets))
 	}
 
-	// 大批量目标警告：超过 5000 时提示推荐参数
+	// 大批量目标警告
 	if len(targets) > 5000 {
-		fmt.Fprintf(os.Stderr, "[!] Large scan: %d probes detected.\n", len(targets))
+		fmt.Fprintf(os.Stderr, "[!] large scan: %d probes\n", len(targets))
 		if cfg.TimeoutConnectMs >= 1000 {
-			fmt.Fprintf(os.Stderr, "[!]   Tip (intranet): use --timeout 200 --threads 2000 --mcp-threads 200 for faster results\n")
+			fmt.Fprintf(os.Stderr, "    tip (intranet): --timeout 200 --threads 2000 --mcp-threads 200\n")
 		}
-		fmt.Fprintf(os.Stderr, "[!]   Tip (internet): use --skip-port-scan if feeding pre-scanned IP:Port list\n")
+		fmt.Fprintf(os.Stderr, "    tip (internet): --skip-port-scan for pre-scanned IP:port list\n\n")
 	}
 
-	fmt.Fprintf(os.Stderr, "[*] AgentScan starting: %d hosts × %d ports = %d probes\n",
-		hostCount, len(cfg.Ports), len(targets))
-	if outputPath != "" {
-		fmt.Fprintf(os.Stderr, "[*] Output file: %s\n", outputPath)
+	// 构造端口列表字符串（超过 10 个省略）
+	portStrs := make([]string, len(cfg.Ports))
+	for i, p := range cfg.Ports {
+		portStrs[i] = fmt.Sprintf("%d", p)
 	}
-	fmt.Fprintf(os.Stderr, "[*] Config: threads=%d  connect-timeout=%dms  mcp-threads=%d%s\n",
-		cfg.Concurrency, cfg.TimeoutConnectMs, cfg.MCPConcurrency,
-		map[bool]string{true: "  skip-port-scan=true", false: ""}[cfg.SkipPortScan])
+	portList := strings.Join(portStrs, ",")
+	if len(cfg.Ports) > 10 {
+		portList = strings.Join(portStrs[:10], ",") + fmt.Sprintf(",...(%d)", len(cfg.Ports))
+	}
+
+	skipStr := ""
+	if cfg.SkipPortScan {
+		skipStr = "  skip-port-scan"
+	}
+	fmt.Fprintf(os.Stderr, "AgentScan  %d host(s)  %d port(s)  %d probe(s)\n",
+		hostCount, len(cfg.Ports), len(targets))
+	fmt.Fprintf(os.Stderr, "           ports=%s\n", portList)
+	fmt.Fprintf(os.Stderr, "           threads=%d  timeout=%dms  mcp-threads=%d%s\n",
+		cfg.Concurrency, cfg.TimeoutConnectMs, cfg.MCPConcurrency, skipStr)
+	if outputPath != "" {
+		fmt.Fprintf(os.Stderr, "           output=%s\n", outputPath)
+	}
+	fmt.Fprintf(os.Stderr, "\n")
 
 	// 实时打印回调
 	var onFound func(*models.MCPServer)
@@ -407,7 +376,7 @@ func RunScan(ctx context.Context, rawTargets []string, filePath string,
 	if err != nil {
 		return results, fmt.Errorf("write HTML report: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "[*] HTML reports: %s\n", reportDir)
+	fmt.Fprintf(os.Stderr, "report     %s\n", reportDir)
 
 	return results, nil
 }

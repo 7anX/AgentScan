@@ -156,10 +156,8 @@ func PrintSummary(results []*models.MCPServer, noColor bool) {
 		totalPrompts += r.PromptCount
 	}
 
-	fmt.Printf("\n%sAgentScan summary%s\n", bold, reset)
-	fmt.Printf("%-10s %8s %8s %13s %10s\n", "Protocol", "Servers", "No-auth", "Auth-required", "Honeypots")
-	fmt.Printf("%-10s %8d %8d %13d %10d\n", "MCP", total, noAuthCount, authRequired, honeypots)
-	fmt.Printf("%-10s %8d %8d %13d %10d\n", "Total", total, noAuthCount, authRequired, honeypots)
-	fmt.Printf("Exposure   tools=%d  resources=%d  templates=%d  prompts=%d\n",
+	fmt.Printf("%sSummary%s  MCP=%d  no-auth=%d  auth-required=%d  honeypots=%d\n",
+		bold, reset, total, noAuthCount, authRequired, honeypots)
+	fmt.Printf("         tools=%d  resources=%d  templates=%d  prompts=%d\n",
 		totalTools, totalResources, totalResTemplates, totalPrompts)
 }
