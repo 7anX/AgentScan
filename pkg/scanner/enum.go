@@ -106,13 +106,24 @@ type sseSession struct {
 	msgCh   chan map[string]interface{}
 }
 
+func boundedSSESessionTimeout(timeoutMs int) time.Duration {
+	timeout := time.Duration(timeoutMs) * 2 * time.Millisecond
+	if timeout < 5*time.Second {
+		return 5 * time.Second
+	}
+	if timeout > 15*time.Second {
+		return 15 * time.Second
+	}
+	return timeout
+}
+
 // newSSESession 建立 SSE 长连接，返回可复用的 session 对象。
 // 调用方负责调用 sess.cancel() 关闭连接。
 func newSSESession(ctx context.Context, baseURL, ssePath, hostname string, timeoutMs int) *sseSession {
 	timeout := time.Duration(timeoutMs) * time.Millisecond
 	client := buildHTTPClient(hostname, timeout)
 
-	sessCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*5*time.Millisecond)
+	sessCtx, cancel := context.WithTimeout(ctx, boundedSSESessionTimeout(timeoutMs))
 
 	sseReq, err := http.NewRequestWithContext(sessCtx, "GET", baseURL+ssePath, nil)
 	if err != nil {

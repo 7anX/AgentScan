@@ -1,4 +1,4 @@
-﻿package scanner
+package scanner
 
 import (
 	"bytes"
@@ -166,17 +166,32 @@ func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string
 	var bestAuthRequired *ProbeResult
 	var bestAuthPriority = int(^uint(0) >> 1)
 
-	for res := range resultCh {
-		if !res.r.AuthRequired {
-			if res.priority < bestNoAuthPriority {
-				bestNoAuth = res.r
-				bestNoAuthPriority = res.priority
+	for resultCh != nil {
+		select {
+		case res, ok := <-resultCh:
+			if !ok {
+				resultCh = nil
+				break
 			}
-		} else {
-			if res.priority < bestAuthPriority {
-				bestAuthRequired = res.r
-				bestAuthPriority = res.priority
+			if !res.r.AuthRequired {
+				if res.priority < bestNoAuthPriority {
+					bestNoAuth = res.r
+					bestNoAuthPriority = res.priority
+				}
+				if res.priority == 0 {
+					return bestNoAuth
+				}
+			} else {
+				if res.priority < bestAuthPriority {
+					bestAuthRequired = res.r
+					bestAuthPriority = res.priority
+				}
 			}
+		case <-probeCtx.Done():
+			if bestNoAuth != nil {
+				return bestNoAuth
+			}
+			return bestAuthRequired
 		}
 	}
 
@@ -299,9 +314,9 @@ func tryStreamableHTTP(ctx context.Context, client *http.Client, url, endpoint s
 // 这是 SSE legacy 的核心协议要求：session 与连接绑定，断开连接即 session 失效。
 // ssePath 是实际的 SSE GET 路径（如 /sse、/mcp/sse、/mcp-server/sse、/sse/），不再硬编码。
 func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL, ssePath string, timeout time.Duration) *ProbeResult {
-	// 整个 SSE 会话使用独立超时，不依赖外层 ctx。
+	// 整个 SSE 会话使用独立超时，并跟随外层 ctx 取消。
 	// 12s：GET握手(~1s) + endpoint event(~1s) + POST(~1s) + SSE message回推(~3s) + 跨国链路余量
-	sessCtx, sessCancel := context.WithTimeout(context.Background(), 12*time.Second)
+	sessCtx, sessCancel := context.WithTimeout(ctx, 12*time.Second)
 	defer sessCancel()
 
 	// Step 1: 建立 SSE 连接并启动监听 goroutine
@@ -322,10 +337,10 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL, ssePath
 		if sseResp.StatusCode == 401 || sseResp.StatusCode == 403 {
 			io.Copy(io.Discard, io.LimitReader(sseResp.Body, 4096)) //nolint:errcheck
 			return &ProbeResult{
-				Transport:      models.TransportHTTPSSELegacy,
+				Transport:        models.TransportHTTPSSELegacy,
 				FingerprintScore: 0.5,
-				NoAuth:         false,
-				AuthRequired:   true,
+				NoAuth:           false,
+				AuthRequired:     true,
 			}
 		}
 		return nil
@@ -486,6 +501,7 @@ func scoreFingerprint(data map[string]interface{}) (float64, string, string, str
 
 	return score, serverName, serverVer, protocolVer, caps
 }
+
 // InitializeRequest returns a pre-built MCP initialize request body for the given protocol version.
 // Exported for use by other packages (e.g., analysis).
 func InitializeRequest(version string) []byte {

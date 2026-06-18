@@ -2,7 +2,9 @@ package output
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/agentscan/agentscan/pkg/models"
@@ -11,76 +13,118 @@ import (
 // NoColorEnabled reports whether color should be disabled.
 // Respects the NO_COLOR environment variable (https://no-color.org/).
 func NoColorEnabled() bool {
-	return os.Getenv("NO_COLOR") != ""
+	if os.Getenv("NO_COLOR") != "" {
+		return true
+	}
+	if os.Getenv("AGENTSCAN_COLOR") == "always" || os.Getenv("CLICOLOR_FORCE") != "" || os.Getenv("FORCE_COLOR") != "" {
+		return false
+	}
+	return runtime.GOOS == "windows"
 }
 
-// ANSI 颜色
 const (
 	colorReset  = "\033[0m"
 	colorYellow = "\033[33m"
-	colorCyan   = "\033[36m"
 	colorGreen  = "\033[32m"
 	colorBold   = "\033[1m"
 )
 
-// PrintServer 实时打印单个 MCP 服务器发现结果
+// PrintServer prints one MCP server finding as a compact terminal block.
 func PrintServer(s *models.MCPServer, noColor bool) {
-	bold, reset, yellow := "", "", ""
+	FprintServer(os.Stdout, s, noColor)
+}
+
+func FprintServer(w io.Writer, s *models.MCPServer, noColor bool) {
+	bold, reset, statusColor, warning := "", "", "", ""
 	if !noColor {
-		bold = colorGreen + colorBold
+		bold = colorBold
 		reset = colorReset
-		yellow = colorYellow
+		warning = colorYellow
 	}
 
 	auth := "no-auth"
 	if s.AuthRequired {
 		auth = "auth-required"
 		if !noColor {
-			bold = colorYellow + colorBold // auth-required 用黄色区分
+			statusColor = colorYellow + colorBold
 		}
 	} else if !s.NoAuth {
 		auth = "auth"
+	} else if !noColor {
+		statusColor = colorGreen + colorBold
 	}
 
-	fmt.Printf("%s[MCP]%s %s:%d  %s  %s  v=%s  %s\n",
+	target := fmt.Sprintf("%s:%d%s", s.IP, s.Port, s.Endpoint)
+	version := s.ProtocolVersion
+	if version == "" {
+		version = "unknown"
+	}
+
+	fmt.Fprintf(w, "%s[MCP]%s %-30s %-15s %-12s %s%s%s\n",
 		bold, reset,
-		s.IP, s.Port,
-		s.Endpoint,
-		s.Transport,
-		s.ProtocolVersion,
-		auth,
+		target,
+		transportLabel(s.Transport),
+		version,
+		statusColor, auth, reset,
 	)
 
 	if s.AuthRequired {
-		fmt.Printf("      %s[AUTH-REQUIRED] tools unknown (authentication needed)%s\n", yellow, reset)
-	} else if s.ServerName != "" {
-		fmt.Printf("      server=%q  tools=%d  resources=%d  res_templates=%d  prompts=%d\n",
-			s.ServerName+"/"+s.ServerVersion, s.ToolCount, s.ResourceCount, s.ResourceTemplateCount, s.PromptCount)
+		fmt.Fprintf(w, "      %sauth%s     tools/resources unavailable until authenticated\n", warning, reset)
 	} else {
-		fmt.Printf("      tools=%d  resources=%d  res_templates=%d  prompts=%d\n",
+		if server := serverLabel(s); server != "" {
+			fmt.Fprintf(w, "      server   %s\n", server)
+		}
+		fmt.Fprintf(w, "      exposed  tools=%d  resources=%d  templates=%d  prompts=%d\n",
 			s.ToolCount, s.ResourceCount, s.ResourceTemplateCount, s.PromptCount)
 	}
 
-	// 蜜罐信号
 	if s.Honeypot.Suspected {
-		hp := ""
+		honeypotColor := ""
 		if !noColor {
-			hp = colorYellow
+			honeypotColor = colorYellow
 		}
-		fmt.Printf("      %s[HONEYPOT] score=%d  signals: %s%s\n",
-			hp, s.Honeypot.Score,
-			strings.Join(s.Honeypot.Signals, ", "),
-			reset)
+		fmt.Fprintf(w, "      %shoneypot%s score=%d  signals=%s\n",
+			honeypotColor, reset,
+			s.Honeypot.Score,
+			strings.Join(s.Honeypot.Signals, ", "))
 	}
-	fmt.Println()
+
+	fmt.Fprintln(w)
 }
 
-// PrintHoneypot 专门打印蜜罐结果（保留兼容，内部调 PrintServer）
+func transportLabel(t models.Transport) string {
+	switch t {
+	case models.TransportStreamableHTTP:
+		return "streamable-http"
+	case models.TransportHTTPSSELegacy:
+		return "sse-legacy"
+	default:
+		if t == "" {
+			return "unknown"
+		}
+		return string(t)
+	}
+}
+
+func serverLabel(s *models.MCPServer) string {
+	switch {
+	case s.ServerName != "" && s.ServerVersion != "" && s.ServerName != s.ServerVersion:
+		return fmt.Sprintf("%s (%s)", s.ServerName, s.ServerVersion)
+	case s.ServerName != "":
+		return s.ServerName
+	case s.ServerVersion != "":
+		return s.ServerVersion
+	default:
+		return ""
+	}
+}
+
+// PrintHoneypot prints a honeypot finding.
 func PrintHoneypot(s *models.MCPServer, noColor bool) {
 	PrintServer(s, noColor)
 }
 
-// PrintSummary 扫描完成后打印汇总（按协议分行，为多协议扩展预留格式）
+// PrintSummary prints the final scan summary.
 func PrintSummary(results []*models.MCPServer, noColor bool) {
 	bold, reset := "", ""
 	if !noColor {
@@ -112,19 +156,10 @@ func PrintSummary(results []*models.MCPServer, noColor bool) {
 		totalPrompts += r.PromptCount
 	}
 
-	fmt.Printf("\n%s=== AgentScan Summary ===%s\n", bold, reset)
-	fmt.Printf("%-12s  %-8s  %-8s  %-9s\n", "Protocol", "Servers", "Unauth", "Honeypots")
-	fmt.Printf("%-12s  %-8s  %-8s  %-9s\n",
-		"────────────", "───────", "───────", "─────────")
-	fmt.Printf("%-12s  %-8d  %-8d  %-9d\n", "MCP", total, noAuthCount, honeypots)
-	// ponytail: placeholder row per protocol — expand when A2A/ACP land
-	fmt.Printf("%-12s  %-8s  %-8s  %-9s\n",
-		"────────────", "───────", "───────", "─────────")
-	fmt.Printf("%-12s  %-8d  %-8d  %-9d\n", "Total", total, noAuthCount, honeypots)
-	fmt.Printf("\n")
-	fmt.Printf("  Auth-required   : %d\n", authRequired)
-	fmt.Printf("  Tools exposed   : %d\n", totalTools)
-	fmt.Printf("  Resources       : %d\n", totalResources)
-	fmt.Printf("  Res templates   : %d\n", totalResTemplates)
-	fmt.Printf("  Prompts         : %d\n", totalPrompts)
+	fmt.Printf("\n%sAgentScan summary%s\n", bold, reset)
+	fmt.Printf("%-10s %8s %8s %13s %10s\n", "Protocol", "Servers", "No-auth", "Auth-required", "Honeypots")
+	fmt.Printf("%-10s %8d %8d %13d %10d\n", "MCP", total, noAuthCount, authRequired, honeypots)
+	fmt.Printf("%-10s %8d %8d %13d %10d\n", "Total", total, noAuthCount, authRequired, honeypots)
+	fmt.Printf("Exposure   tools=%d  resources=%d  templates=%d  prompts=%d\n",
+		totalTools, totalResources, totalResTemplates, totalPrompts)
 }

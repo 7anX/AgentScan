@@ -17,38 +17,21 @@ type JSONReport struct {
 
 // JSONSummary 扫描摘要
 type JSONSummary struct {
-	Total                 int `json:"total"`
-	Unauthenticated       int `json:"unauthenticated"`
-	AuthRequired          int `json:"auth_required"`
-	Honeypots             int `json:"honeypots"`
-	TotalTools            int `json:"total_tools"`
-	TotalResources        int `json:"total_resources"`
+	Total                  int `json:"total"`
+	Unauthenticated        int `json:"unauthenticated"`
+	AuthRequired           int `json:"auth_required"`
+	Honeypots              int `json:"honeypots"`
+	TotalTools             int `json:"total_tools"`
+	TotalResources         int `json:"total_resources"`
 	TotalResourceTemplates int `json:"total_resource_templates"`
-	TotalPrompts          int `json:"total_prompts"`
+	TotalPrompts           int `json:"total_prompts"`
 }
 
 // WriteJSON 输出 JSON 报告到文件或 stdout
 func WriteJSON(results []*models.MCPServer, path string) error {
-	summary := JSONSummary{Total: len(results)}
-	for _, r := range results {
-		if r.NoAuth {
-			summary.Unauthenticated++
-		}
-		if r.AuthRequired {
-			summary.AuthRequired++
-		}
-		if r.Honeypot.Suspected {
-			summary.Honeypots++
-		}
-		summary.TotalTools += r.ToolCount
-		summary.TotalResources += r.ResourceCount
-		summary.TotalResourceTemplates += r.ResourceTemplateCount
-		summary.TotalPrompts += r.PromptCount
-	}
-
 	report := JSONReport{
 		Version: "1.0",
-		Summary: summary,
+		Summary: summarizeResults(results),
 		Results: results,
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -26,6 +27,35 @@ type Pipeline struct {
 // NewPipeline 创建流水线
 func NewPipeline(cfg models.ScanConfig, noColor bool, onFound func(*models.MCPServer)) *Pipeline {
 	return &Pipeline{cfg: cfg, noColor: noColor, onFound: onFound}
+}
+
+func clearProgressLine() {
+	fmt.Fprintf(os.Stderr, "\r%s\r", strings.Repeat(" ", 120))
+}
+
+func progressPercent(done, total int64) int {
+	if total <= 0 {
+		return 100
+	}
+	if done >= total {
+		return 100
+	}
+	pct := int(float64(done) / float64(total) * 100)
+	if pct >= 100 {
+		return 99
+	}
+	return pct
+}
+
+func candidateTimeoutDuration(cfg models.ScanConfig) time.Duration {
+	base := time.Duration(cfg.TimeoutMCPMs+cfg.TimeoutHTTPMs) * time.Millisecond
+	if base < 8*time.Second {
+		return 8 * time.Second
+	}
+	if base > 45*time.Second {
+		return 45 * time.Second
+	}
+	return base
 }
 
 // Run 执行完整扫描，返回所有结果（按风险分从高到低排序）
@@ -61,6 +91,7 @@ func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.M
 
 	total := int64(len(candidates))
 	var done atomic.Int64
+	var displayMu sync.Mutex
 
 	// 进度打印 goroutine：每秒在 stderr 打印一次进度（含当前目标）
 	type probeStatus struct {
@@ -70,8 +101,11 @@ func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.M
 	var ps probeStatus
 
 	stopProgress := make(chan struct{})
+	var progressWG sync.WaitGroup
 	fmt.Fprintf(os.Stderr, "[*] Stage 3/3  MCP probe: %d candidates\n", len(candidates))
+	progressWG.Add(1)
 	go func() {
+		defer progressWG.Done()
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		for {
@@ -81,15 +115,19 @@ func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.M
 				ps.mu.Lock()
 				cur := ps.current
 				ps.mu.Unlock()
+				displayMu.Lock()
 				if cur != "" {
-					fmt.Fprintf(os.Stderr, "\r[*] Probing MCP: %d/%d (%.0f%%)  -> %-40s",
-						n, total, float64(n)/float64(total)*100, cur)
+					fmt.Fprintf(os.Stderr, "\r[*] Probing MCP: %d/%d (%d%%)  -> %-40s",
+						n, total, progressPercent(n, total), cur)
 				} else {
-					fmt.Fprintf(os.Stderr, "\r[*] Probing MCP: %d/%d (%.0f%%)   ",
-						n, total, float64(n)/float64(total)*100)
+					fmt.Fprintf(os.Stderr, "\r[*] Probing MCP: %d/%d (%d%%)   ",
+						n, total, progressPercent(n, total))
 				}
+				displayMu.Unlock()
 			case <-stopProgress:
+				displayMu.Lock()
 				fmt.Fprintf(os.Stderr, "\r[*] Probing MCP: %d/%d done%s\n", total, total, "            ")
+				displayMu.Unlock()
 				return
 			case <-ctx.Done():
 				return
@@ -134,19 +172,25 @@ func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.M
 			var t0 time.Time
 			if p.cfg.Verbose {
 				t0 = time.Now()
+				displayMu.Lock()
 				fmt.Fprintf(os.Stderr, "\n  [PROBE] %s%s\n", c.BaseURL, c.URLPath)
+				displayMu.Unlock()
 			}
 
-			server := p.analyzeCandidate(ctx, c)
+			candidateCtx, cancelCandidate := context.WithTimeout(ctx, candidateTimeoutDuration(p.cfg))
+			server := p.analyzeCandidate(candidateCtx, c)
+			cancelCandidate()
 
 			if p.cfg.Verbose {
 				elapsed := time.Since(t0)
+				displayMu.Lock()
 				if server != nil {
 					fmt.Fprintf(os.Stderr, "  [HIT]   %-35s  server=%q  tools=%d  (%dms)\n",
 						label, server.ServerName, server.ToolCount, elapsed.Milliseconds())
 				} else {
 					fmt.Fprintf(os.Stderr, "  [MISS]  %-35s  (%dms)\n", label, elapsed.Milliseconds())
 				}
+				displayMu.Unlock()
 			}
 
 			if server == nil {
@@ -162,13 +206,17 @@ func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.M
 			mu.Unlock()
 
 			if p.onFound != nil {
+				displayMu.Lock()
+				clearProgressLine()
 				p.onFound(server)
+				displayMu.Unlock()
 			}
 		}(cand)
 	}
 done:
 	wg.Wait()
 	close(stopProgress)
+	progressWG.Wait()
 
 	fmt.Fprintf(os.Stderr, "[*] Stage 3/3  MCP probe done: %d confirmed MCP servers\n", len(results))
 
@@ -346,8 +394,11 @@ func RunScan(ctx context.Context, rawTargets []string, filePath string,
 		map[bool]string{true: "  skip-port-scan=true", false: ""}[cfg.SkipPortScan])
 
 	// 实时打印回调
-	onFound := func(s *models.MCPServer) {
-		output.PrintServer(s, noColor)
+	var onFound func(*models.MCPServer)
+	if format == "terminal" || format == "" {
+		onFound = func(s *models.MCPServer) {
+			output.PrintServer(s, noColor)
+		}
 	}
 
 	pipeline := NewPipeline(cfg, noColor, onFound)
@@ -368,5 +419,22 @@ func RunScan(ctx context.Context, rawTargets []string, filePath string,
 		}
 	}
 
+	reportDir, err := output.WriteHTMLReports(results, htmlReportBaseDir(outputPath))
+	if err != nil {
+		return results, fmt.Errorf("write HTML report: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "[*] HTML reports: %s\n", reportDir)
+
 	return results, nil
+}
+
+func htmlReportBaseDir(outputPath string) string {
+	if outputPath == "" || outputPath == "-" {
+		return "."
+	}
+	dir := filepath.Dir(outputPath)
+	if dir == "" {
+		return "."
+	}
+	return dir
 }

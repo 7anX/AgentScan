@@ -27,9 +27,10 @@ func main() {
 
 func newApp() *cli.App {
 	return &cli.App{
-		Name:    "agentscan",
-		Usage:   "AI agent protocol exposure scanner",
-		Version: version.Version,
+		Name:      "agentscan",
+		Usage:     "Scan exposed AI agent services",
+		UsageText: "agentscan <command> [options] [target...]",
+		Version:   version.Version,
 		Commands: []*cli.Command{
 			mcpCommand(),
 			scanCommand(),
@@ -41,14 +42,16 @@ func newApp() *cli.App {
 func commonFlags() []cli.Flag {
 	return []cli.Flag{
 		&cli.StringSliceFlag{
-			Name:    "target",
-			Aliases: []string{"t"},
-			Usage:   "Target(s): IP, CIDR, IP range (1.1.1.1-2.2.2.2), domain, host:port, URL. Repeatable.",
+			Name:     "target",
+			Aliases:  []string{"t"},
+			Usage:    "Target to scan",
+			Category: "Input",
 		},
 		&cli.StringFlag{
-			Name:    "file",
-			Aliases: []string{"f"},
-			Usage:   "File with targets (one per line, # comments supported)",
+			Name:     "file",
+			Aliases:  []string{"f"},
+			Usage:    "Read targets from file",
+			Category: "Input",
 		},
 		&cli.StringFlag{
 			Name: "ports",
@@ -59,45 +62,95 @@ func commonFlags() []cli.Flag {
 				}
 				return s
 			}(), ","),
-			Usage: "Comma-separated port list",
+			Usage:       "Ports to scan, comma-separated",
+			DefaultText: "built-in MCP list",
+			Category:    "Scan",
 		},
 		&cli.IntFlag{
-			Name:    "threads",
-			Aliases: []string{"T"},
-			Value:   config.DefaultConcurrency,
-			Usage:   "Max concurrent TCP connections",
+			Name:     "threads",
+			Aliases:  []string{"T"},
+			Value:    config.DefaultConcurrency,
+			Usage:    "TCP scan concurrency",
+			Category: "Scan",
 		},
 		&cli.IntFlag{
-			Name:  "timeout",
-			Value: config.DefaultTimeoutConnectMs,
-			Usage: "TCP connect timeout (ms)",
+			Name:        "timeout",
+			Value:       config.DefaultTimeoutConnectMs,
+			Usage:       "TCP timeout in ms",
+			DefaultText: "2000",
+			Category:    "Scan",
 		},
 		&cli.BoolFlag{
-			Name:  "skip-port-scan",
-			Usage: "Skip TCP port scan; treat all inputs as open IP:Port (use when feeding masscan/nmap results)",
+			Name:               "skip-port-scan",
+			Usage:              "Treat input as known open host:port entries",
+			DisableDefaultText: true,
+			Category:           "Scan",
 		},
 		&cli.StringFlag{
-			Name:    "output",
-			Aliases: []string{"o"},
-			Usage:   "JSON output file path",
+			Name:     "output",
+			Aliases:  []string{"o"},
+			Usage:    "Write JSON results to file",
+			Category: "Output",
 		},
 		&cli.StringFlag{
-			Name:  "format",
-			Value: "terminal",
-			Usage: "Output format: terminal|json",
+			Name:        "format",
+			Value:       "terminal",
+			Usage:       "Output format: terminal or json",
+			DefaultText: "terminal",
+			Category:    "Output",
 		},
 		&cli.BoolFlag{
-			Name:    "verbose",
-			Aliases: []string{"v"},
-			Usage:   "Verbose logging: show each open port, current probe target, and response time",
+			Name:               "verbose",
+			Aliases:            []string{"v"},
+			Usage:              "Show probe progress details",
+			DisableDefaultText: true,
+			Category:           "Output",
 		},
 		&cli.BoolFlag{
-			Name:    "no-color",
-			Aliases: []string{"Cn"},
-			Usage:   "Disable colored output",
+			Name:               "no-color",
+			Aliases:            []string{"Cn"},
+			Usage:              "Disable ANSI colors",
+			DisableDefaultText: true,
+			Category:           "Output",
 		},
 	}
 }
+
+const scanHelpTemplate = `NAME:
+   {{.HelpName}} - {{.Usage}}
+
+USAGE:
+   {{.UsageText}}
+
+EXAMPLES:
+   agentscan {{.Name}} 192.168.1.0/24
+   agentscan {{.Name}} -f targets.txt --skip-port-scan -o results.json
+
+OPTIONS:
+   Input
+     TARGET...                 IP, CIDR, range, domain, host:port, or URL
+     -t, --target TARGET       Add target (repeatable)
+     -f, --file FILE           Read targets from file
+
+   Scan
+     --ports LIST              Ports to scan (default: built-in MCP list)
+     --skip-port-scan          Input is already open host:port
+     -T, --threads N           TCP scan concurrency (default: 500)
+     --timeout MS              TCP timeout (default: 2000)
+     --mcp-threads N           MCP probe concurrency (default: 50)
+
+   Output
+     HTML reports             Auto-written to agentscan-report-*/
+     -o, --output FILE         Write JSON report
+     --format terminal|json    Output format (default: terminal)
+     -v, --verbose             Show probe details
+     --no-color, --Cn          Disable colors
+
+   Filter / Debug
+     --exclude-honeypots       Hide suspected honeypots
+     --verbose-raw             Include raw initialize response in JSON
+     -h, --help                Show help
+`
 
 func mcpCommand() *cli.Command {
 	return mcpCommandWithAction(runAction)
@@ -106,26 +159,33 @@ func mcpCommand() *cli.Command {
 func mcpCommandWithAction(action cli.ActionFunc) *cli.Command {
 	flags := append(commonFlags(),
 		&cli.BoolFlag{
-			Name:  "exclude-honeypots",
-			Usage: "Exclude suspected honeypots from results",
+			Name:               "exclude-honeypots",
+			Usage:              "Hide suspected honeypots",
+			DisableDefaultText: true,
+			Category:           "Filter",
 		},
 		&cli.BoolFlag{
-			Name:  "verbose-raw",
-			Usage: "Include raw initialize response in JSON output",
+			Name:               "verbose-raw",
+			Usage:              "Include raw MCP initialize response in JSON",
+			DisableDefaultText: true,
+			Category:           "Debug",
 		},
 		&cli.IntFlag{
-			Name:  "mcp-threads",
-			Value: 50,
-			Usage: "Max concurrent MCP probe connections (default 50; raise for large batches)",
+			Name:        "mcp-threads",
+			Value:       50,
+			Usage:       "MCP probe concurrency",
+			DefaultText: "50",
+			Category:    "Scan",
 		},
 	)
 	return &cli.Command{
 		Name:                   "mcp",
-		Usage:                  "Scan targets for exposed MCP (Model Context Protocol) servers",
-		ArgsUsage:              "[TARGET...]",
+		Usage:                  "Scan MCP servers",
+		UsageText:              "agentscan mcp [options] [target...]",
 		UseShortOptionHandling: true,
 		Flags:                  flags,
 		Action:                 action,
+		CustomHelpTemplate:     scanHelpTemplate,
 	}
 }
 
@@ -136,26 +196,33 @@ func scanCommand() *cli.Command {
 func scanCommandWithAction(action cli.ActionFunc) *cli.Command {
 	flags := append(commonFlags(),
 		&cli.BoolFlag{
-			Name:  "exclude-honeypots",
-			Usage: "Exclude suspected honeypots from results",
+			Name:               "exclude-honeypots",
+			Usage:              "Hide suspected honeypots",
+			DisableDefaultText: true,
+			Category:           "Filter",
 		},
 		&cli.BoolFlag{
-			Name:  "verbose-raw",
-			Usage: "Include raw initialize response in JSON output",
+			Name:               "verbose-raw",
+			Usage:              "Include raw MCP initialize response in JSON",
+			DisableDefaultText: true,
+			Category:           "Debug",
 		},
 		&cli.IntFlag{
-			Name:  "mcp-threads",
-			Value: 50,
-			Usage: "Max concurrent MCP probe connections (default 50; raise for large batches)",
+			Name:        "mcp-threads",
+			Value:       50,
+			Usage:       "MCP probe concurrency",
+			DefaultText: "50",
+			Category:    "Scan",
 		},
 	)
 	return &cli.Command{
 		Name:                   "scan",
-		Usage:                  "Scan targets for all supported protocols (currently: MCP)",
-		ArgsUsage:              "[TARGET...]",
+		Usage:                  "Scan all supported protocols",
+		UsageText:              "agentscan scan [options] [target...]",
 		UseShortOptionHandling: true,
 		Flags:                  flags,
 		Action:                 action,
+		CustomHelpTemplate:     scanHelpTemplate,
 	}
 }
 

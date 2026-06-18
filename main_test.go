@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/urfave/cli/v2"
@@ -108,6 +110,52 @@ func TestNormalizeArgsSupportsScanCommand(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Targets, []string{"positional.example"}) {
 		t.Fatalf("targets = %#v, want positional.example", got.Targets)
+	}
+}
+
+func TestMCPHelpShowsGroupedUsefulOptions(t *testing.T) {
+	var buf bytes.Buffer
+	app := newApp()
+	app.Writer = &buf
+
+	if err := app.Run([]string{"agentscan", "mcp", "-h"}); err != nil {
+		t.Fatalf("app.Run() error = %v", err)
+	}
+	help := buf.String()
+
+	for _, want := range []string{
+		"Input",
+		"Scan",
+		"Output",
+		"Filter / Debug",
+		"-t, --target TARGET",
+		"-f, --file FILE",
+		"--ports LIST",
+		"-T, --threads N",
+		"--timeout MS",
+		"--skip-port-scan",
+		"--mcp-threads N",
+		"-o, --output FILE",
+		"HTML reports",
+		"--format terminal|json",
+		"-v, --verbose",
+		"--no-color, --Cn",
+		"--exclude-honeypots",
+		"--verbose-raw",
+	} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("help missing %q\n%s", want, help)
+		}
+	}
+
+	for _, noisy := range []string{
+		`8000,8001,443`,
+		"(default: false)",
+		"[ --target value, -t value ]",
+	} {
+		if strings.Contains(help, noisy) {
+			t.Fatalf("help should not contain noisy text %q\n%s", noisy, help)
+		}
 	}
 }
 
