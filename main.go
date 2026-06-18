@@ -17,7 +17,16 @@ import (
 )
 
 func main() {
-	app := &cli.App{
+	app := newApp()
+
+	if err := app.Run(normalizeArgs(os.Args, app.Commands)); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func newApp() *cli.App {
+	return &cli.App{
 		Name:    "agentscan",
 		Usage:   "AI agent protocol exposure scanner",
 		Version: version.Version,
@@ -25,11 +34,6 @@ func main() {
 			mcpCommand(),
 			scanCommand(),
 		},
-	}
-
-	if err := app.Run(os.Args); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
 	}
 }
 
@@ -88,14 +92,18 @@ func commonFlags() []cli.Flag {
 			Usage:   "Verbose logging: show each open port, current probe target, and response time",
 		},
 		&cli.BoolFlag{
-			Name:  "no-color",
+			Name:    "no-color",
 			Aliases: []string{"Cn"},
-			Usage: "Disable colored output",
+			Usage:   "Disable colored output",
 		},
 	}
 }
 
 func mcpCommand() *cli.Command {
+	return mcpCommandWithAction(runAction)
+}
+
+func mcpCommandWithAction(action cli.ActionFunc) *cli.Command {
 	flags := append(commonFlags(),
 		&cli.BoolFlag{
 			Name:  "exclude-honeypots",
@@ -117,11 +125,15 @@ func mcpCommand() *cli.Command {
 		ArgsUsage:              "[TARGET...]",
 		UseShortOptionHandling: true,
 		Flags:                  flags,
-		Action:                 runAction,
+		Action:                 action,
 	}
 }
 
 func scanCommand() *cli.Command {
+	return scanCommandWithAction(runAction)
+}
+
+func scanCommandWithAction(action cli.ActionFunc) *cli.Command {
 	flags := append(commonFlags(),
 		&cli.BoolFlag{
 			Name:  "exclude-honeypots",
@@ -143,12 +155,12 @@ func scanCommand() *cli.Command {
 		ArgsUsage:              "[TARGET...]",
 		UseShortOptionHandling: true,
 		Flags:                  flags,
-		Action:                 runAction,
+		Action:                 action,
 	}
 }
 
 func runAction(c *cli.Context) error {
-	rawTargets := append(c.StringSlice("target"), filterNonFlags(c.Args().Slice())...)
+	rawTargets := append(c.StringSlice("target"), c.Args().Slice()...)
 
 	cfg := models.DefaultConfig()
 	cfg.Concurrency = c.Int("threads")
@@ -162,21 +174,9 @@ func runAction(c *cli.Context) error {
 	cfg.MCPConcurrency = c.Int("mcp-threads")
 	cfg.SkipPortScan = c.Bool("skip-port-scan")
 
-	noColor := c.Bool("no-color") || hasArgAnywhere("--no-color") || hasArgAnywhere("-Cn") || output.NoColorEnabled()
-
-	// 对于在 positional arg 后面的 valued flag，urfave/cli 无法解析，
-	// 优先从 os.Args 直接读取，覆盖 urfave/cli 的默认值
-	format := getArgValue("--format")
-	if format == "" {
-		format = c.String("format")
-	}
-	outputPath := getArgValue("--output")
-	if outputPath == "" {
-		outputPath = getArgValue("-o")
-	}
-	if outputPath == "" {
-		outputPath = c.String("output")
-	}
+	noColor := c.Bool("no-color") || output.NoColorEnabled()
+	format := c.String("format")
+	outputPath := c.String("output")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -210,52 +210,106 @@ func parsePorts(s string) []int {
 	return ports
 }
 
-func hasArgAnywhere(flag string) bool {
-	for _, arg := range os.Args {
-		if arg == flag {
-			return true
-		}
-	}
-	return false
+type argFlagSpec struct {
+	takesValue bool
 }
 
-// getArgValue 从 os.Args 任意位置读取 --flag value 的值
-func getArgValue(flag string) string {
-	for i, arg := range os.Args {
-		if arg == flag && i+1 < len(os.Args) {
-			next := os.Args[i+1]
-			if !strings.HasPrefix(next, "-") {
-				return next
+func normalizeArgs(args []string, commands []*cli.Command) []string {
+	if len(args) < 2 {
+		return append([]string(nil), args...)
+	}
+
+	cmdIndex, cmd := findCommand(args[1:], commands)
+	if cmd == nil {
+		return append([]string(nil), args...)
+	}
+	cmdIndex++
+
+	normalized := append([]string(nil), args[:cmdIndex+1]...)
+	normalized = append(normalized, normalizeCommandArgs(args[cmdIndex+1:], commandFlagSpecs(cmd))...)
+	return normalized
+}
+
+func findCommand(args []string, commands []*cli.Command) (int, *cli.Command) {
+	for i, arg := range args {
+		for _, cmd := range commands {
+			if cmd.HasName(arg) {
+				return i, cmd
 			}
 		}
 	}
-	return ""
+	return -1, nil
 }
 
-func filterNonFlags(args []string) []string {
-	var targets []string
-	skipNext := false
-	valuedFlags := map[string]bool{
-		"--file": true, "-f": true,
-		"--ports": true, "--threads": true, "-T": true,
-		"--timeout": true,
-		"--output": true, "-o": true,
-		"--format": true,
-		"--target": true, "-t": true,
-		"--mcp-threads": true,
+func commandFlagSpecs(cmd *cli.Command) map[string]argFlagSpec {
+	specs := map[string]argFlagSpec{
+		"--help":                     {},
+		"-help":                      {},
+		"-h":                         {},
+		"--generate-bash-completion": {},
+		"-generate-bash-completion":  {},
 	}
-	for _, arg := range args {
-		if skipNext {
-			skipNext = false
-			continue
+
+	for _, flag := range cmd.Flags {
+		spec := argFlagSpec{}
+		if docFlag, ok := flag.(cli.DocGenerationFlag); ok {
+			spec.takesValue = docFlag.TakesValue()
 		}
-		if strings.HasPrefix(arg, "--") || (strings.HasPrefix(arg, "-") && len(arg) == 2) {
-			if valuedFlags[arg] {
-				skipNext = true
+		for _, name := range flag.Names() {
+			specs["--"+name] = spec
+			specs["-"+name] = spec
+		}
+	}
+
+	return specs
+}
+
+func normalizeCommandArgs(args []string, flagSpecs map[string]argFlagSpec) []string {
+	preTerminator := args
+	var terminatorAndAfter []string
+	for i, arg := range args {
+		if arg == "--" {
+			preTerminator = args[:i]
+			terminatorAndAfter = args[i:]
+			break
+		}
+	}
+
+	var flagArgs []string
+	var positionalArgs []string
+	for i := 0; i < len(preTerminator); i++ {
+		arg := preTerminator[i]
+		flagName := flagTokenName(arg)
+		spec, knownFlag := flagSpecs[flagName]
+
+		if flagName != "" && knownFlag {
+			flagArgs = append(flagArgs, arg)
+			if spec.takesValue && !strings.Contains(arg, "=") && i+1 < len(preTerminator) {
+				i++
+				flagArgs = append(flagArgs, preTerminator[i])
 			}
 			continue
 		}
-		targets = append(targets, arg)
+
+		if flagName != "" {
+			flagArgs = append(flagArgs, arg)
+			continue
+		}
+
+		positionalArgs = append(positionalArgs, arg)
 	}
-	return targets
+
+	normalized := append(flagArgs, positionalArgs...)
+	normalized = append(normalized, terminatorAndAfter...)
+	return normalized
+}
+
+func flagTokenName(arg string) string {
+	if arg == "-" || !strings.HasPrefix(arg, "-") {
+		return ""
+	}
+	if idx := strings.Index(arg, "="); idx >= 0 {
+		return arg[:idx]
+	}
+	return arg
 }
