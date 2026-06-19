@@ -753,6 +753,11 @@ func isMCPAuthRequiredWithEvidence(resp *http.Response, endpoint string) (bool, 
 	case 404:
 		evidence.Reasons = append(evidence.Reasons, "HTTP 404 endpoint not found")
 		return false, evidence
+	case 405:
+		// Method Not Allowed：路径存在但不接受 POST，典型 SSE legacy 端点（只接受 GET）
+		// 不当作 auth-required，让调用方继续尝试 SSE legacy 探测
+		evidence.Reasons = append(evidence.Reasons, "HTTP 405 method not allowed; may be SSE-only endpoint")
+		return false, evidence
 	}
 
 	score := 0

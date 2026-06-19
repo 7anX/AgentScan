@@ -132,6 +132,7 @@ func ParseFile(path string, ports []int) ([]Target, error) {
 		}
 		ts, err := Parse(line, ports)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "[WARN] skip %q: %v\n", line, err)
 			continue
 		}
 		targets = append(targets, ts...)
