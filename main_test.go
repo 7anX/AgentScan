@@ -23,6 +23,7 @@ type parsedCLI struct {
 	ExcludeHoneypots bool
 	VerboseRaw       bool
 	MCPThreads       int
+	Proxy            string
 }
 
 func TestNormalizeArgsParsesFlagsAfterTargets(t *testing.T) {
@@ -35,6 +36,7 @@ func TestNormalizeArgsParsesFlagsAfterTargets(t *testing.T) {
 		"--ports", "80,443",
 		"--file", "targets.txt",
 		"--skip-port-scan",
+		"--proxy", "socks5://127.0.0.1:1080",
 		"--mcp-threads", "5",
 		"--exclude-honeypots",
 		"--verbose-raw",
@@ -55,6 +57,7 @@ func TestNormalizeArgsParsesFlagsAfterTargets(t *testing.T) {
 		Verbose:          true,
 		NoColor:          true,
 		SkipPortScan:     true,
+		Proxy:            "socks5://127.0.0.1:1080",
 		ExcludeHoneypots: true,
 		VerboseRaw:       true,
 		MCPThreads:       5,
@@ -100,6 +103,7 @@ func TestNormalizeArgsSupportsScanCommand(t *testing.T) {
 		"agentscan", "scan", "positional.example",
 		"--format", "json",
 		"--mcp-threads", "11",
+		"--proxy", "http://127.0.0.1:8080",
 	})
 
 	if got.Format != "json" {
@@ -108,8 +112,21 @@ func TestNormalizeArgsSupportsScanCommand(t *testing.T) {
 	if got.MCPThreads != 11 {
 		t.Fatalf("mcp-threads = %d, want 11", got.MCPThreads)
 	}
+	if got.Proxy != "http://127.0.0.1:8080" {
+		t.Fatalf("proxy = %q, want http://127.0.0.1:8080", got.Proxy)
+	}
 	if !reflect.DeepEqual(got.Targets, []string{"positional.example"}) {
 		t.Fatalf("targets = %#v, want positional.example", got.Targets)
+	}
+}
+
+func TestLoadDictFallsBackWhenCustomDirFails(t *testing.T) {
+	ds := loadDict(t.TempDir() + "/missing")
+	if ds == nil {
+		t.Fatal("loadDict returned nil")
+	}
+	if len(ds.MCPPorts) == 0 || len(ds.A2APorts) == 0 {
+		t.Fatalf("fallback dict should include built-in ports: %#v", ds)
 	}
 }
 
@@ -134,6 +151,7 @@ func TestMCPHelpShowsGroupedUsefulOptions(t *testing.T) {
 		"-T, --threads N",
 		"--timeout MS",
 		"--skip-port-scan",
+		"--proxy URL",
 		"--mcp-threads N",
 		"-o, --output FILE",
 		"HTML reports",
@@ -165,6 +183,7 @@ func TestA2ACommandParsesFlagsAfterTargets(t *testing.T) {
 		"--format", "json",
 		"--output", "a2a.json",
 		"--skip-port-scan",
+		"--proxy", "socks4://127.0.0.1:1080",
 		"--a2a-threads", "17",
 		"--include-probable",
 		"--verbose-raw",
@@ -180,6 +199,9 @@ func TestA2ACommandParsesFlagsAfterTargets(t *testing.T) {
 	}
 	if !got.SkipPortScan || !got.IncludeProbable || !got.VerboseRaw {
 		t.Fatalf("boolean flags not parsed: %#v", got)
+	}
+	if got.Proxy != "socks4://127.0.0.1:1080" {
+		t.Fatalf("proxy = %q, want socks4://127.0.0.1:1080", got.Proxy)
 	}
 	if got.A2AThreads != 17 {
 		t.Fatalf("a2a threads = %d, want 17", got.A2AThreads)
@@ -205,6 +227,7 @@ func parseCLIForTest(t *testing.T, args []string) parsedCLI {
 			ExcludeHoneypots: c.Bool("exclude-honeypots"),
 			VerboseRaw:       c.Bool("verbose-raw"),
 			MCPThreads:       c.Int("mcp-threads"),
+			Proxy:            c.String("proxy"),
 		}
 		return nil
 	}
@@ -230,6 +253,7 @@ type parsedA2ACLI struct {
 	IncludeProbable bool
 	VerboseRaw      bool
 	A2AThreads      int
+	Proxy           string
 }
 
 func parseA2ACLIForTest(t *testing.T, args []string) parsedA2ACLI {
@@ -245,6 +269,7 @@ func parseA2ACLIForTest(t *testing.T, args []string) parsedA2ACLI {
 			IncludeProbable: c.Bool("include-probable"),
 			VerboseRaw:      c.Bool("verbose-raw"),
 			A2AThreads:      c.Int("a2a-threads"),
+			Proxy:           c.String("proxy"),
 		}
 		return nil
 	}

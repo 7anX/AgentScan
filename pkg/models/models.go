@@ -152,6 +152,7 @@ type ScanConfig struct {
 	VerboseRaw       bool
 	Verbose          bool            // 详细日志：打印每个开放端口、每个探测过程、耗时
 	Dict             *config.DictSet // 解耦字典集合；nil 时各模块应调用 config.DefaultDictSet()
+	Proxy            string          // 可选代理：(socks5|socks4|https|http)://host:port
 }
 
 // DefaultConfig MCP 扫描默认配置（数值来自 pkg/config/config.go，统一在那里修改）

@@ -13,16 +13,17 @@ import (
 
 	"github.com/agentscan/agentscan/pkg/analysis"
 	"github.com/agentscan/agentscan/pkg/models"
+	"github.com/agentscan/agentscan/pkg/netproxy"
 	"github.com/agentscan/agentscan/pkg/output"
 	"github.com/agentscan/agentscan/pkg/target"
 )
 
 // Pipeline 完整扫描流水线
 type Pipeline struct {
-	cfg          models.ScanConfig
-	noColor      bool
-	probeLabel   string // printed as "[N/N] <probeLabel> probe" in RunFromCandidates
-	onFound      func(*models.MCPServer) // 实时回调
+	cfg        models.ScanConfig
+	noColor    bool
+	probeLabel string                  // printed as "[N/N] <probeLabel> probe" in RunFromCandidates
+	onFound    func(*models.MCPServer) // 实时回调
 }
 
 // NewPipeline 创建流水线
@@ -355,6 +356,9 @@ func (p *Pipeline) analyzeCandidate(ctx context.Context, c HTTPCandidate) *model
 // RunScan 便捷入口：解析目标 + 运行流水线 + 实时打印
 func RunScan(ctx context.Context, rawTargets []string, filePath string,
 	cfg models.ScanConfig, outputPath string, format string, noColor bool) ([]*models.MCPServer, error) {
+	if err := netproxy.Configure(cfg.Proxy); err != nil {
+		return nil, fmt.Errorf("proxy: %w", err)
+	}
 
 	// 收集所有目标
 	var targets []target.Target
@@ -419,11 +423,15 @@ func RunScan(ctx context.Context, rawTargets []string, filePath string,
 	if cfg.SkipPortScan {
 		skipStr = "  skip-port-scan"
 	}
+	proxyStr := ""
+	if cfg.Proxy != "" {
+		proxyStr = "  proxy=" + cfg.Proxy
+	}
 	fmt.Fprintf(os.Stderr, "AgentScan  %d host(s)  %d port(s)  %d probe(s)\n",
 		hostCount, len(cfg.Ports), len(targets))
 	fmt.Fprintf(os.Stderr, "           ports=%s\n", portList)
-	fmt.Fprintf(os.Stderr, "           threads=%d  connect-timeout=%dms  http-timeout=%dms  mcp-timeout=%dms  mcp-threads=%d%s\n",
-		cfg.Concurrency, cfg.TimeoutConnectMs, cfg.TimeoutHTTPMs, cfg.TimeoutMCPMs, cfg.MCPConcurrency, skipStr)
+	fmt.Fprintf(os.Stderr, "           threads=%d  connect-timeout=%dms  http-timeout=%dms  mcp-timeout=%dms  mcp-threads=%d%s%s\n",
+		cfg.Concurrency, cfg.TimeoutConnectMs, cfg.TimeoutHTTPMs, cfg.TimeoutMCPMs, cfg.MCPConcurrency, skipStr, proxyStr)
 	if outputPath != "" {
 		fmt.Fprintf(os.Stderr, "           output=%s\n", outputPath)
 	}

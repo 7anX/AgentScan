@@ -46,7 +46,7 @@ func mustBuildInit(version string) []byte {
 			"protocolVersion": version,
 			"capabilities":    map[string]interface{}{},
 			"clientInfo": map[string]interface{}{
-				"name":    "agentscan",
+				"name":    "mcp-client",
 				"version": "1.0.0",
 			},
 		},
@@ -317,8 +317,8 @@ func tryStreamableHTTP(ctx context.Context, client *http.Client, url, endpoint s
 		return nil
 	}
 	req.Header.Set("Content-Type", "application/json")
-	// 规范 REQUIRED：必须同时列出两种 Accept
 	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("User-Agent", config.UserAgent)
 
 	start := time.Now()
 	resp, err := client.Do(req)
@@ -535,6 +535,7 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL, ssePath
 		return nil
 	}
 	postReq.Header.Set("Content-Type", "application/json")
+	postReq.Header.Set("User-Agent", config.UserAgent)
 
 	start := time.Now()
 	postResp, err := client.Do(postReq)

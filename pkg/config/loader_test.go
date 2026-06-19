@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -62,6 +63,18 @@ func TestDefaultDictSet_DeepCopy(t *testing.T) {
 		if p == 99999 {
 			t.Error("DefaultPorts global was mutated")
 		}
+	}
+}
+
+func TestRepoDictFilesMatchBuiltInDefaults(t *testing.T) {
+	ds, err := LoadDictSet(filepath.FromSlash("../../dicts"))
+	if err != nil {
+		t.Fatalf("load repo dicts: %v", err)
+	}
+	defaults := DefaultDictSet()
+
+	if !reflect.DeepEqual(ds, defaults) {
+		t.Fatalf("repo dict files drifted from built-in defaults\nrepo:    %#v\nbuiltIn: %#v", ds, defaults)
 	}
 }
 

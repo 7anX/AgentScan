@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/agentscan/agentscan/pkg/config"
+	"github.com/agentscan/agentscan/pkg/netproxy"
 )
 
 func TestHostForURLBracketsIPv6(t *testing.T) {
@@ -131,5 +132,43 @@ func TestFilterHTTP_NilDict(t *testing.T) {
 
 	if len(candidates) != 1 {
 		t.Fatalf("expected 1 candidate with nil dict, got %d", len(candidates))
+	}
+}
+
+func TestFilterHTTPUsesHTTPProxy(t *testing.T) {
+	proxyHit := make(chan string, 1)
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.IsAbs() {
+			proxyHit <- r.URL.String()
+		}
+		w.Header().Set("Server", "uvicorn")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(proxySrv.Close)
+	t.Cleanup(func() { _ = netproxy.Configure("") })
+
+	if err := netproxy.Configure(proxySrv.URL); err != nil {
+		t.Fatalf("Configure proxy: %v", err)
+	}
+
+	dict := config.DefaultDictSet()
+	delete(dict.HTTPSPorts, 45678)
+	ports := []PortResult{{IP: "203.0.113.10", Port: 45678, Open: true}}
+	candidates := FilterHTTP(context.Background(), ports, 3000, 10, dict)
+
+	if len(candidates) != 1 {
+		t.Fatalf("expected proxy-backed candidate, got %d", len(candidates))
+	}
+	if candidates[0].Priority != 2 {
+		t.Fatalf("priority = %d, want 2 from proxy response server hint", candidates[0].Priority)
+	}
+	select {
+	case got := <-proxyHit:
+		want := "http://203.0.113.10:45678/"
+		if got != want {
+			t.Fatalf("proxy saw URL %q, want %q", got, want)
+		}
+	default:
+		t.Fatal("proxy was not used")
 	}
 }

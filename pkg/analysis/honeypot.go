@@ -8,13 +8,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/agentscan/agentscan/internal/sseutil"
 	"github.com/agentscan/agentscan/pkg/models"
+	"github.com/agentscan/agentscan/pkg/netproxy"
 )
 
 // DetectHoneypot 蜜罐检测（2个强信号）
@@ -71,11 +71,9 @@ func newTLSClient(hostname string, timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout: timeout * 3,
 		Transport: &http.Transport{
-			TLSClientConfig: tlsCfg,
-			DialContext: (&net.Dialer{
-				Timeout:   timeout,
-				KeepAlive: 0,
-			}).DialContext,
+			TLSClientConfig:     tlsCfg,
+			Proxy:               netproxy.HTTPProxy(),
+			DialContext:         netproxy.HTTPDialContext(timeout),
 			TLSHandshakeTimeout: timeout,
 			DisableKeepAlives:   true,
 		},
@@ -115,6 +113,7 @@ func sendInitProbe(ctx context.Context, client *http.Client, url, version string
 	}
 	return data, sid
 }
+
 // buildProbeBody 构造 MCP initialize 请求体。
 // 逻辑与 scanner.initializeRequest 相同，这里独立实现以避免包循环依赖。
 func buildProbeBody(version string) []byte {

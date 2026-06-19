@@ -564,7 +564,7 @@ func probeA2AJSONRPCInterface(ctx context.Context, client *http.Client, item *mo
 	body, _ := json.Marshal(map[string]interface{}{
 		"jsonrpc": "2.0",
 		"id":      1,
-		"method":  "AgentScanProbe",
+		"method":  "tasks/get",
 		"params":  map[string]interface{}{},
 	})
 	req, err := http.NewRequestWithContext(ctx, "POST", item.URL, bytes.NewReader(body))

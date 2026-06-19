@@ -23,6 +23,9 @@ func loadDict(dictDir string) *config.DictSet {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[WARN] dict-dir: %v\n", err)
 	}
+	if ds == nil {
+		return config.DefaultDictSet()
+	}
 	return ds
 }
 
@@ -97,6 +100,12 @@ func commonFlags() []cli.Flag {
 			Category:           "Scan",
 		},
 		&cli.StringFlag{
+			Name:        "proxy",
+			Usage:       "Proxy URL: (socks5|socks4|https|http)://host:port",
+			DefaultText: "",
+			Category:    "Scan",
+		},
+		&cli.StringFlag{
 			Name:     "output",
 			Aliases:  []string{"o"},
 			Usage:    "Write JSON results to file",
@@ -146,6 +155,7 @@ OPTIONS:
      --ports LIST              Ports to scan (overrides dict-dir / built-in list)
      --dict-dir DIR            Directory with custom dict txt files
      --skip-port-scan          Input is already open host:port
+     --proxy URL               Proxy: (socks5|socks4|https|http)://host:port
      -T, --threads N           TCP scan concurrency (default: 500)
      --timeout MS              TCP timeout (default: 2000)
      --mcp-threads N           MCP probe concurrency (default: 50)
@@ -220,6 +230,7 @@ OPTIONS:
      --ports LIST              Ports to scan (overrides dict-dir / built-in list)
      --dict-dir DIR            Directory with custom dict txt files
      --skip-port-scan          Input is already open host:port
+     --proxy URL               Proxy: (socks5|socks4|https|http)://host:port
      -T, --threads N           TCP scan concurrency (default: 500)
      --timeout MS              TCP timeout (default: 2000)
      --a2a-threads N           A2A probe concurrency (default: 50)
@@ -330,6 +341,7 @@ func runAction(c *cli.Context) error {
 	cfg.Verbose = c.Bool("verbose")
 	cfg.MCPConcurrency = c.Int("mcp-threads")
 	cfg.SkipPortScan = c.Bool("skip-port-scan")
+	cfg.Proxy = c.String("proxy")
 
 	noColor := c.Bool("no-color") || output.NoColorEnabled()
 	format := c.String("format")
@@ -370,6 +382,7 @@ func runA2AAction(c *cli.Context) error {
 	cfg.Verbose = c.Bool("verbose")
 	cfg.MCPConcurrency = c.Int("a2a-threads")
 	cfg.SkipPortScan = c.Bool("skip-port-scan")
+	cfg.Proxy = c.String("proxy")
 
 	noColor := c.Bool("no-color") || output.NoColorEnabled()
 	format := c.String("format")

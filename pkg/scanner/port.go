@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agentscan/agentscan/pkg/netproxy"
 	"github.com/agentscan/agentscan/pkg/target"
 	"golang.org/x/sync/semaphore"
 )
@@ -46,7 +47,7 @@ func ScanPorts(ctx context.Context, targets []target.Target, concurrency int, ti
 			defer wg.Done()
 			defer sem.Release(1)
 
-			open := tcpConnect(t.IP, t.Port, timeout)
+			open := tcpConnect(ctx, t.IP, t.Port, timeout)
 			if open {
 				host := t.IP
 				if t.Hostname != "" {
@@ -67,9 +68,9 @@ func ScanPorts(ctx context.Context, targets []target.Target, concurrency int, ti
 	return results
 }
 
-func tcpConnect(ip string, port int, timeout time.Duration) bool {
+func tcpConnect(ctx context.Context, ip string, port int, timeout time.Duration) bool {
 	addr := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
-	conn, err := net.DialTimeout("tcp", addr, timeout)
+	conn, err := netproxy.DialContext(ctx, "tcp", addr, timeout)
 	if err != nil {
 		return false
 	}

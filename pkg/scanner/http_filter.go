@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/agentscan/agentscan/pkg/config"
+	"github.com/agentscan/agentscan/pkg/netproxy"
 )
 
 // HTTPCandidate HTTP 筛选结果
@@ -91,16 +92,7 @@ func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int, concurre
 					server = strings.ToLower(resp.Header.Get("Server"))
 					ct = strings.ToLower(resp.Header.Get("Content-Type"))
 					resp.Body.Close()
-
-					for _, hint := range dict.MCPServerHints {
-						if strings.Contains(server, hint) {
-							priority = 2
-							break
-						}
-					}
-					if priority == 0 && (strings.Contains(ct, "text/event-stream") || strings.Contains(ct, "application/json")) {
-						priority = 1
-					}
+					priority = httpCandidatePriority(server, ct, dict.MCPServerHints)
 				}
 			}
 
@@ -132,16 +124,7 @@ func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int, concurre
 							server = strings.ToLower(resp.Header.Get("Server"))
 							ct = strings.ToLower(resp.Header.Get("Content-Type"))
 							resp.Body.Close()
-
-							for _, hint := range dict.MCPServerHints {
-								if strings.Contains(server, hint) {
-									priority = 2
-									break
-								}
-							}
-							if priority == 0 && (strings.Contains(ct, "text/event-stream") || strings.Contains(ct, "application/json")) {
-								priority = 1
-							}
+							priority = httpCandidatePriority(server, ct, dict.MCPServerHints)
 						}
 					}
 				}
@@ -167,6 +150,18 @@ done:
 	return candidates
 }
 
+func httpCandidatePriority(server, contentType string, hints []string) int {
+	for _, hint := range hints {
+		if strings.Contains(server, hint) {
+			return 2
+		}
+	}
+	if strings.Contains(contentType, "text/event-stream") || strings.Contains(contentType, "application/json") {
+		return 1
+	}
+	return 0
+}
+
 func hostForURL(host string) string {
 	if ip := net.ParseIP(host); ip != nil && strings.Contains(host, ":") {
 		return "[" + host + "]"
@@ -185,13 +180,10 @@ func buildHTTPClient(hostname string, timeout time.Duration) *http.Client {
 	}
 
 	transport := &http.Transport{
-		TLSClientConfig: tlsCfg,
-		DialContext: (&net.Dialer{
-			Timeout:   timeout,
-			KeepAlive: 0,
-		}).DialContext,
+		TLSClientConfig:     tlsCfg,
+		Proxy:               netproxy.HTTPProxy(),
+		DialContext:         netproxy.HTTPDialContext(timeout),
 		TLSHandshakeTimeout: timeout,
-		DisableKeepAlives:   true,
 	}
 
 	return &http.Client{

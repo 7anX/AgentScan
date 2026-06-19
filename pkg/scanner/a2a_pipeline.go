@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/agentscan/agentscan/pkg/models"
+	"github.com/agentscan/agentscan/pkg/netproxy"
 	"github.com/agentscan/agentscan/pkg/output"
 	"github.com/agentscan/agentscan/pkg/target"
 )
@@ -210,6 +211,9 @@ func (p *A2APipeline) analyzeCandidate(ctx context.Context, c HTTPCandidate) *mo
 
 func RunA2AScan(ctx context.Context, rawTargets []string, filePath string,
 	cfg models.ScanConfig, outputPath string, format string, noColor bool, includeProbable bool) ([]*models.A2AServer, error) {
+	if err := netproxy.Configure(cfg.Proxy); err != nil {
+		return nil, fmt.Errorf("proxy: %w", err)
+	}
 
 	var targets []target.Target
 	if filePath != "" {
@@ -255,10 +259,14 @@ func RunA2AScan(ctx context.Context, rawTargets []string, filePath string,
 	if cfg.SkipPortScan {
 		skipStr = "  skip-port-scan"
 	}
+	proxyStr := ""
+	if cfg.Proxy != "" {
+		proxyStr = "  proxy=" + cfg.Proxy
+	}
 	fmt.Fprintf(os.Stderr, "AgentScan A2A  %d host(s)  %d port(s)  %d probe(s)\n", len(hostSet), len(cfg.Ports), len(targets))
 	fmt.Fprintf(os.Stderr, "               ports=%s\n", portList)
-	fmt.Fprintf(os.Stderr, "               threads=%d  connect-timeout=%dms  http-timeout=%dms  a2a-timeout=%dms  a2a-threads=%d%s\n",
-		cfg.Concurrency, cfg.TimeoutConnectMs, cfg.TimeoutHTTPMs, cfg.TimeoutMCPMs, cfg.MCPConcurrency, skipStr)
+	fmt.Fprintf(os.Stderr, "               threads=%d  connect-timeout=%dms  http-timeout=%dms  a2a-timeout=%dms  a2a-threads=%d%s%s\n",
+		cfg.Concurrency, cfg.TimeoutConnectMs, cfg.TimeoutHTTPMs, cfg.TimeoutMCPMs, cfg.MCPConcurrency, skipStr, proxyStr)
 	if outputPath != "" {
 		fmt.Fprintf(os.Stderr, "               output=%s\n", outputPath)
 	}
