@@ -2,11 +2,11 @@ package llmtpl
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,7 +22,6 @@ type MatchResult struct {
 	FrameworkVersion string          // extracted version
 	Models           []string        // extracted model IDs
 	AuthStatus       string          // "open" | "auth_required" | "unknown"
-	RiskLevel        string          // "CRITICAL" | "HIGH" | "MEDIUM" | "INFO"
 	MatchedPaths     []string        // paths where matchers hit
 	Score            float64         // match confidence (0.0 - 1.0)
 	Evidence         []ProbeEvidence // per-endpoint evidence
@@ -30,11 +29,12 @@ type MatchResult struct {
 
 // ProbeEvidence records proof from a single probed endpoint.
 type ProbeEvidence struct {
-	Method       string
-	Path         string
-	StatusCode   int
-	ResponseMs   float64
-	Matched      bool
+	Method             string
+	Path               string
+	StatusCode         int
+	ResponseMs         float64
+	Matched            bool
+	ResponseFieldCount int // number of top-level JSON fields in the response body
 }
 
 // ─── Compiled Template ──────────────────────────────────────────────────────
@@ -202,9 +202,6 @@ func (e *Engine) ProbeTarget(ctx context.Context, baseURL string, client *http.C
 	// Determine auth status
 	authStatus := evaluateAuth(tpl.Auth, responses)
 
-	// Determine risk level
-	riskLevel := evaluateRisk(tpl.Risk, authStatus, len(models))
-
 	return &MatchResult{
 		TemplateID:       tpl.Info.Name,
 		TemplateName:     tpl.Info.Name,
@@ -212,7 +209,6 @@ func (e *Engine) ProbeTarget(ctx context.Context, baseURL string, client *http.C
 		FrameworkVersion: version,
 		Models:           models,
 		AuthStatus:       authStatus,
-		RiskLevel:        riskLevel,
 		MatchedPaths:     winner.matchedPaths,
 		Score:            winner.score,
 		Evidence:         winner.evidence,
@@ -352,6 +348,7 @@ func evaluateRules(rules []compiledRule, responses map[string]*ProbeResponse) (m
 
 		ev.StatusCode = resp.StatusCode
 		ev.ResponseMs = resp.ElapsedMs
+		ev.ResponseFieldCount = countJSONFields(resp.Body)
 
 		cfg := responseToMatchConfig(resp)
 
@@ -415,50 +412,14 @@ func evaluateAuth(auth *AuthRule, responses map[string]*ProbeResponse) string {
 	return "unknown"
 }
 
-func evaluateRisk(risk *RiskMatrix, authStatus string, modelCount int) string {
-	if risk == nil {
-		// Default risk mapping
-		switch authStatus {
-		case "open":
-			if modelCount > 0 {
-				return "CRITICAL"
-			}
-			return "HIGH"
-		case "auth_required":
-			return "MEDIUM"
-		default:
-			return "INFO"
-		}
+// countJSONFields counts the number of top-level keys in a JSON object body.
+// Returns 0 for non-JSON or non-object responses.
+func countJSONFields(body []byte) int {
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(body, &obj) != nil {
+		return 0
 	}
-
-	switch authStatus {
-	case "open":
-		if modelCount > 0 {
-			return normalizeRisk(risk.OpenWithModels)
-		}
-		return normalizeRisk(risk.OpenNoModels)
-	case "auth_required":
-		return normalizeRisk(risk.AuthRequired)
-	default:
-		return "INFO"
-	}
-}
-
-func normalizeRisk(r string) string {
-	switch strings.ToLower(r) {
-	case "critical":
-		return "CRITICAL"
-	case "high":
-		return "HIGH"
-	case "medium":
-		return "MEDIUM"
-	case "low":
-		return "LOW"
-	case "info":
-		return "INFO"
-	default:
-		return "INFO"
-	}
+	return len(obj)
 }
 
 func compileTemplate(t *Template) (*CompiledTemplate, error) {
@@ -526,5 +487,3 @@ func (e *Engine) TemplateNames() []string {
 	return names
 }
 
-// unused but kept for API completeness
-var _ = strconv.Itoa

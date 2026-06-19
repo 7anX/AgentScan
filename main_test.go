@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agentscan/agentscan/pkg/config"
 	"github.com/urfave/cli/v2"
 )
 
@@ -130,6 +131,18 @@ func TestLoadDictFallsBackWhenCustomDirFails(t *testing.T) {
 	}
 }
 
+func TestAllProtocolPortsIncludesA2AAndLLMDefaults(t *testing.T) {
+	got := allProtocolPorts(&config.DictSet{
+		MCPPorts: []int{8000, 443},
+		A2APorts: []int{443, 4010},
+		LLMPorts: []int{11434, 8000},
+	})
+	want := []int{8000, 443, 4010, 11434}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("allProtocolPorts() = %v, want %v", got, want)
+	}
+}
+
 func TestMCPHelpShowsGroupedUsefulOptions(t *testing.T) {
 	var buf bytes.Buffer
 	app := newApp()
@@ -155,6 +168,7 @@ func TestMCPHelpShowsGroupedUsefulOptions(t *testing.T) {
 		"--mcp-threads N",
 		"-o, --output FILE",
 		"HTML reports",
+		"A2A/LLM JSON",
 		"--format terminal|json",
 		"-v, --verbose",
 		"--no-color, --Cn",

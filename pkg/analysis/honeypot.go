@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentscan/agentscan/internal/mcpwire"
 	"github.com/agentscan/agentscan/internal/sseutil"
 	"github.com/agentscan/agentscan/pkg/config"
 	"github.com/agentscan/agentscan/pkg/models"
@@ -85,7 +86,7 @@ func newTLSClient(hostname string, timeout time.Duration) *http.Client {
 
 // sendInitProbe 发送 initialize 请求，返回响应数据和 session ID
 func sendInitProbe(ctx context.Context, client *http.Client, url, version string) (map[string]interface{}, string) {
-	body := buildProbeBody(version)
+	body := mcpwire.InitializeRequest(version)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
@@ -113,20 +114,4 @@ func sendInitProbe(ctx context.Context, client *http.Client, url, version string
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&data)
 	}
 	return data, sid
-}
-
-// buildProbeBody 构造 MCP initialize 请求体。
-// 逻辑与 scanner.initializeRequest 相同，这里独立实现以避免包循环依赖。
-func buildProbeBody(version string) []byte {
-	b, _ := json.Marshal(map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "initialize",
-		"params": map[string]interface{}{
-			"protocolVersion": version,
-			"capabilities":    map[string]interface{}{},
-			"clientInfo":      map[string]interface{}{"name": "mcp-client", "version": "1.0.0"},
-		},
-	})
-	return b
 }

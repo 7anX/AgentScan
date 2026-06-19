@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agentscan/agentscan/internal/mcpwire"
 	"github.com/agentscan/agentscan/internal/sseutil"
 	"github.com/agentscan/agentscan/pkg/config"
 	"github.com/agentscan/agentscan/pkg/models"
@@ -30,42 +31,9 @@ var lspCapKeys = map[string]bool{
 	"referencesProvider": true, "documentSymbolProvider": true,
 }
 
-// 预计算 initialize 请求体，避免每次探测都 json.Marshal
-var (
-	initBodyStreamable = mustBuildInit("2025-06-18")
-	initBodyLegacy     = mustBuildInit("2024-11-05")
-	initBodyInvalid    = mustBuildInit("9999-99-99") // 蜜罐探针专用
-)
-
-func mustBuildInit(version string) []byte {
-	b, _ := json.Marshal(map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "initialize",
-		"params": map[string]interface{}{
-			"protocolVersion": version,
-			"capabilities":    map[string]interface{}{},
-			"clientInfo": map[string]interface{}{
-				"name":    "mcp-client",
-				"version": "1.0.0",
-			},
-		},
-	})
-	return b
-}
-
 // initializeRequest 构造 MCP initialize 请求体（优先使用预计算版本）
 func initializeRequest(version string) []byte {
-	switch version {
-	case "2025-06-18":
-		return initBodyStreamable
-	case "2024-11-05":
-		return initBodyLegacy
-	case "9999-99-99":
-		return initBodyInvalid
-	default:
-		return mustBuildInit(version)
-	}
+	return mcpwire.InitializeRequest(version)
 }
 
 // ProbeResult MCP 探测结果
@@ -115,7 +83,7 @@ func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string
 		priority int // 越小越优先（端点在列表中的位置）
 	}
 
-	resultCh := make(chan result, len(endpoints)+len(endpoints)) // 留足缓冲
+	resultCh := make(chan result, len(endpoints)*2) // 留足 streamable + SSE fallback 缓冲
 	var wg sync.WaitGroup
 
 	for i, endpoint := range endpoints {
@@ -124,7 +92,7 @@ func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string
 			defer wg.Done()
 			url := baseURL + ep
 
-			r := tryStreamableHTTP(probeCtx, client, url, ep, dict.MCPAuthPaths)
+			r := tryStreamableHTTP(probeCtx, client, url, ep, timeout, dict.MCPAuthPaths)
 			if r != nil {
 				r.Endpoint = ep
 				resultCh <- result{r, priority}
@@ -306,9 +274,9 @@ func sseProbeSessionTimeout(timeout time.Duration) time.Duration {
 }
 
 // endpoint 参数用于辅助 auth-required 判断（/mcp、/sse 等 MCP 特征路径名）
-func tryStreamableHTTP(ctx context.Context, client *http.Client, url, endpoint string, authPaths map[string]bool) *ProbeResult {
-	// 单个端点探测最多等 3 秒，避免 20 个端点串行时总超时爆炸
-	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+func tryStreamableHTTP(ctx context.Context, client *http.Client, url, endpoint string, timeout time.Duration, authPaths map[string]bool) *ProbeResult {
+	// min(timeout, 3s)：3s 上限防止多端点并发时总时间爆炸。
+	probeCtx, cancel := context.WithTimeout(ctx, streamableProbeTimeout(timeout))
 	defer cancel()
 
 	body := initializeRequest("2025-06-18")
@@ -619,6 +587,15 @@ func sseProbeResult(postPath string, elapsed, score float64, serverName, serverV
 	}
 }
 
+// streamableProbeTimeout returns min(timeout, 3s).
+// The 3s cap prevents total scan time from blowing up when many endpoints are probed.
+func streamableProbeTimeout(timeout time.Duration) time.Duration {
+	if timeout <= 0 || timeout > 3*time.Second {
+		return 3 * time.Second
+	}
+	return timeout
+}
+
 // scoreFingerprint 三层指纹打分
 // 实际最大分：protocolVersion(0.2) + capKey(0.3) + serverName(0.1) = 0.6
 // 注：L3（ping/notifications）在 ProbeMCP 外层补充，满分 1.0
@@ -694,7 +671,7 @@ func scoreFingerprintDetailed(data map[string]interface{}) (float64, string, str
 // InitializeRequest returns a pre-built MCP initialize request body for the given protocol version.
 // Exported for use by other packages (e.g., analysis).
 func InitializeRequest(version string) []byte {
-	return initializeRequest(version)
+	return mcpwire.InitializeRequest(version)
 }
 
 func marshalRaw(v interface{}) json.RawMessage {
@@ -772,11 +749,16 @@ func isMCPAuthRequiredWithEvidence(resp *http.Response, endpoint string, authPat
 
 	score := 0
 	code := resp.StatusCode
+	hasMCPHeader := false
+	hasAuthChallenge := false
+	hasJSONRPC := false
 	if resp.Header.Get("MCP-Protocol-Version") != "" || resp.Header.Get("MCP-Session-Id") != "" {
+		hasMCPHeader = true
 		score += 2
 		evidence.Reasons = append(evidence.Reasons, "MCP response header present")
 	}
 	if code == 401 || code == 403 || (code == 400 && resp.Header.Get("WWW-Authenticate") != "") {
+		hasAuthChallenge = true
 		score++
 		evidence.Reasons = append(evidence.Reasons, fmt.Sprintf("HTTP %d auth challenge", code))
 	}
@@ -798,6 +780,7 @@ func isMCPAuthRequiredWithEvidence(resp *http.Response, endpoint string, authPat
 			evidence.Reasons = append(evidence.Reasons, "JSON response body")
 		}
 		if strings.Contains(bodyStr, `"jsonrpc"`) {
+			hasJSONRPC = true
 			score += 2
 			evidence.Reasons = append(evidence.Reasons, "JSON-RPC response body")
 		}
@@ -807,7 +790,7 @@ func isMCPAuthRequiredWithEvidence(resp *http.Response, endpoint string, authPat
 		}
 	}
 
-	if score >= 2 {
+	if (hasJSONRPC && score >= 3) || (hasMCPHeader && hasAuthChallenge) {
 		evidence.Status = "auth-required"
 		return true, evidence
 	}

@@ -171,7 +171,7 @@ OPTIONS:
 
    Output
      HTML reports             Auto-written to agentscan-report-*/ and agentscan-a2a-*/
-     -o, --output FILE         Write MCP JSON; A2A JSON written to FILE_a2a.json
+     -o, --output FILE         Write MCP JSON; A2A/LLM JSON written to FILE_a2a.json / FILE_llm.json
      --format terminal|json    Output format (default: terminal)
      -v, --verbose             Show probe details
      --no-color, --Cn          Disable colors

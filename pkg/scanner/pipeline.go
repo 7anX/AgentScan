@@ -537,13 +537,14 @@ func RunScan(ctx context.Context, rawTargets []string, filePath string,
 		}
 	}
 
-	// Single unified report containing both MCP and A2A results
+	// Single unified report containing MCP, A2A, and LLM results
 	fmt.Fprintf(os.Stderr, "report     generating unified html/txt files...\n")
-	reportDir, err := output.WriteUnifiedHTMLReports(results, a2aResults, htmlReportBaseDir(outputPath), rawTargets, filePath)
+	reportDir, err := output.WriteUnifiedHTMLReports(results, a2aResults, llmResults, htmlReportBaseDir(outputPath), rawTargets, filePath)
 	if err != nil {
 		return results, fmt.Errorf("write HTML report: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "report     %s\n", reportDir)
+	fmt.Fprintf(os.Stderr, "           MCP=%d  A2A=%d  LLM=%d\n", len(results), len(a2aResults), len(llmResults))
 
 	return results, nil
 }

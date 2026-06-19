@@ -126,10 +126,12 @@ func PrintHoneypot(s *models.MCPServer, noColor bool) {
 
 // PrintSummary prints the final scan summary.
 func PrintSummary(results []*models.MCPServer, noColor bool) {
-	bold, reset := "", ""
+	bold, reset, redBold, yellow := "", "", "", ""
 	if !noColor {
 		bold = colorBold
 		reset = colorReset
+		redBold = "\033[31m\033[1m"
+		yellow = colorYellow
 	}
 
 	total := len(results)
@@ -156,8 +158,20 @@ func PrintSummary(results []*models.MCPServer, noColor bool) {
 		totalPrompts += r.PromptCount
 	}
 
-	fmt.Printf("%sSummary%s  MCP=%d  no-auth=%d  auth-required=%d  honeypots=%d\n",
-		bold, reset, total, noAuthCount, authRequired, honeypots)
+	// no-auth — red bold if > 0
+	noAuthStr := fmt.Sprintf("no-auth=%d", noAuthCount)
+	if noAuthCount > 0 {
+		noAuthStr = fmt.Sprintf("%sno-auth=%d%s", redBold, noAuthCount, reset)
+	}
+
+	// honeypots — yellow if > 0
+	honeypotStr := fmt.Sprintf("honeypots=%d", honeypots)
+	if honeypots > 0 {
+		honeypotStr = fmt.Sprintf("%shoneypots=%d%s", yellow, honeypots, reset)
+	}
+
+	fmt.Printf("%sSummary%s  MCP=%d  %s  auth-required=%d  %s\n",
+		bold, reset, total, noAuthStr, authRequired, honeypotStr)
 	fmt.Printf("         tools=%d  resources=%d  templates=%d  prompts=%d\n",
 		totalTools, totalResources, totalResTemplates, totalPrompts)
 }

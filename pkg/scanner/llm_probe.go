@@ -43,11 +43,12 @@ func ProbeLLMWithHostname(ctx context.Context, engine *llmtpl.Engine, baseURL, h
 	var totalMs float64
 	for _, ev := range result.Evidence {
 		evidence.MatchedEndpoints = append(evidence.MatchedEndpoints, models.LLMEndpointEvidence{
-			Method:     ev.Method,
-			Path:       ev.Path,
-			StatusCode: ev.StatusCode,
-			Matched:    ev.Matched,
-			ResponseMs: ev.ResponseMs,
+			Method:             ev.Method,
+			Path:               ev.Path,
+			StatusCode:         ev.StatusCode,
+			Matched:            ev.Matched,
+			ResponseMs:         ev.ResponseMs,
+			ResponseFieldCount: ev.ResponseFieldCount,
 		})
 		if ev.ResponseMs > 0 {
 			totalMs += ev.ResponseMs
@@ -65,7 +66,6 @@ func ProbeLLMWithHostname(ctx context.Context, engine *llmtpl.Engine, baseURL, h
 		Models:           llmModels,
 		ModelCount:       len(llmModels),
 		AuthStatus:       result.AuthStatus,
-		RiskLevel:        result.RiskLevel,
 		FingerprintScore: result.Score,
 		TLSEnabled:       strings.HasPrefix(baseURL, "https"),
 		ResponseTimeMs:   avgMs,

@@ -57,24 +57,38 @@ type reportLanguage struct {
 	AuthReasons          string
 	None                 string
 
+	// ── A2A 专用 ──
+	A2ADeclaredAuth    string
+	A2ACardURL         string
+	A2AExposureSignals string
+	A2AInterfaces      string
+	A2ASkills          string
+	A2ANoResults       string
+	A2AAgents          string
+	A2ANoAuthRPC       string
+	A2ADisabled        string
+	A2APrivateHost     string
+	A2AAdvertised      string
+
 	// ── LLM 专用 ──
-	LLMFramework     string
-	LLMAuthStatus    string
-	LLMRiskLevel     string
-	LLMModels        string
-	LLMVersion       string
-	LLMResponseTime  string
-	LLMTLS           string
-	LLMProbeEvidence string
-	LLMOpen          string
-	LLMHighCritical  string
-	LLMYes           string
-	LLMNo            string
-	LLMMethod        string
-	LLMPath          string
-	LLMStatusCode    string
-	LLMMatch         string
-	LLMTime          string
+	LLMFramework       string
+	LLMAuthStatus      string
+	LLMModels          string
+	LLMVersion         string
+	LLMResponseTime    string
+	LLMTLS             string
+	LLMProbeEvidence   string
+	LLMOpen            string
+	LLMYes             string
+	LLMNo              string
+	LLMMethod          string
+	LLMPath            string
+	LLMStatusCode      string
+	LLMMatch           string
+	LLMTime            string
+	LLMNegativeSignals string
+	LLMNoResults       string
+	LLMAPIs            string
 }
 
 type htmlServer struct {
@@ -262,9 +276,6 @@ func summarizeResults(results []*models.MCPServer) JSONSummary {
 	return summary
 }
 
-func buildHTMLServers(results []*models.MCPServer) []htmlServer {
-	return buildHTMLServersLang(results, false)
-}
 
 func buildHTMLServersLang(results []*models.MCPServer, zh bool) []htmlServer {
 	servers := make([]htmlServer, 0, len(results))
@@ -586,23 +597,36 @@ func zhReportLanguage() reportLanguage {
 		AuthReasons:          "认证原因",
 		None:                 "无",
 
+		A2ADeclaredAuth:    "声明认证",
+		A2ACardURL:         "Agent 卡片地址",
+		A2AExposureSignals: "暴露信号",
+		A2AInterfaces:      "接口列表",
+		A2ASkills:          "技能列表",
+		A2ANoResults:       "未发现 A2A 智能体。",
+		A2AAgents:          "智能体",
+		A2ANoAuthRPC:       "无认证 RPC",
+		A2ADisabled:        "已禁用",
+		A2APrivateHost:     "私有主机",
+		A2AAdvertised:      "通告地址",
+
 		LLMFramework:     "推理框架",
 		LLMAuthStatus:    "认证状态",
-		LLMRiskLevel:     "风险等级",
 		LLMModels:        "模型数",
 		LLMVersion:       "版本",
 		LLMResponseTime:  "响应时间",
 		LLMTLS:           "TLS",
 		LLMProbeEvidence: "探测证据",
 		LLMOpen:          "开放",
-		LLMHighCritical:  "高危/严重",
 		LLMYes:           "是",
 		LLMNo:            "否",
 		LLMMethod:        "方法",
 		LLMPath:          "路径",
 		LLMStatusCode:    "状态码",
-		LLMMatch:         "匹配",
-		LLMTime:          "耗时",
+		LLMMatch:           "匹配",
+		LLMTime:            "耗时",
+		LLMNegativeSignals: "排除信号",
+		LLMNoResults:       "未发现 LLM API。",
+		LLMAPIs:            "API 数",
 	}
 }
 
@@ -645,23 +669,36 @@ func enReportLanguage() reportLanguage {
 		AuthReasons:          "Auth reasons",
 		None:                 "None",
 
-		LLMFramework:     "Framework",
-		LLMAuthStatus:    "Auth Status",
-		LLMRiskLevel:     "Risk Level",
-		LLMModels:        "Models",
-		LLMVersion:       "Version",
-		LLMResponseTime:  "Response Time",
-		LLMTLS:           "TLS",
-		LLMProbeEvidence: "Probe Evidence",
-		LLMOpen:          "Open",
-		LLMHighCritical:  "High/Critical",
-		LLMYes:           "Yes",
-		LLMNo:            "No",
-		LLMMethod:        "Method",
-		LLMPath:          "Path",
-		LLMStatusCode:    "Status",
-		LLMMatch:         "Match",
-		LLMTime:          "Time",
+		A2ADeclaredAuth:    "Declared Auth",
+		A2ACardURL:         "Card URL",
+		A2AExposureSignals: "Exposure Signals",
+		A2AInterfaces:      "Interfaces",
+		A2ASkills:          "Skills",
+		A2ANoResults:       "No A2A agents found.",
+		A2AAgents:          "Agents",
+		A2ANoAuthRPC:       "No-Auth RPC",
+		A2ADisabled:        "Disabled",
+		A2APrivateHost:     "Private Host",
+		A2AAdvertised:      "Advertised",
+
+		LLMFramework:       "Framework",
+		LLMAuthStatus:      "Auth Status",
+		LLMModels:          "Models",
+		LLMVersion:         "Version",
+		LLMResponseTime:    "Response Time",
+		LLMTLS:             "TLS",
+		LLMProbeEvidence:   "Probe Evidence",
+		LLMOpen:            "Open",
+		LLMYes:             "Yes",
+		LLMNo:              "No",
+		LLMMethod:          "Method",
+		LLMPath:            "Path",
+		LLMStatusCode:      "Status",
+		LLMMatch:           "Match",
+		LLMTime:            "Time",
+		LLMNegativeSignals: "Negative Signals",
+		LLMNoResults:       "No LLM APIs found.",
+		LLMAPIs:            "APIs",
 	}
 }
 

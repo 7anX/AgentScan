@@ -92,16 +92,31 @@ func FprintA2AServer(w io.Writer, s *models.A2AServer, noColor bool) {
 }
 
 func PrintA2ASummary(results []*models.A2AServer, noColor bool) {
-	bold, reset := "", ""
+	bold, reset, redBold, yellow := "", "", "", ""
 	if !noColor {
 		bold = colorBold
 		reset = colorReset
+		redBold = "\033[31m\033[1m"
+		yellow = "\033[33m\033[1m"
 	}
 	summary := summarizeA2AResults(results)
-	fmt.Printf("%sSummary%s  A2A=%d  confirmed=%d  public-cards=%d  no-auth-jsonrpc=%d\n",
-		bold, reset, summary.Total, summary.Confirmed, summary.PublicCards, summary.NoAuthJSONRPC)
-	fmt.Printf("         auth-required=%d  disabled=%d  private-host=%d  probable=%d  skills=%d\n",
-		summary.AuthRequired, summary.EndpointDisabled, summary.PrivateHostAdvertised, summary.ProbableAgentDiscoveries, summary.TotalSkills)
+
+	// no-auth-jsonrpc — red bold if > 0
+	noAuthStr := fmt.Sprintf("no-auth-jsonrpc=%d", summary.NoAuthJSONRPC)
+	if summary.NoAuthJSONRPC > 0 {
+		noAuthStr = fmt.Sprintf("%sno-auth-jsonrpc=%d%s", redBold, summary.NoAuthJSONRPC, reset)
+	}
+
+	// disabled — yellow if > 0
+	disabledStr := fmt.Sprintf("disabled=%d", summary.EndpointDisabled)
+	if summary.EndpointDisabled > 0 {
+		disabledStr = fmt.Sprintf("%sdisabled=%d%s", yellow, summary.EndpointDisabled, reset)
+	}
+
+	fmt.Printf("%sSummary%s  A2A=%d  confirmed=%d  public-cards=%d  %s\n",
+		bold, reset, summary.Total, summary.Confirmed, summary.PublicCards, noAuthStr)
+	fmt.Printf("         auth-required=%d  %s  private-host=%d  probable=%d  skills=%d\n",
+		summary.AuthRequired, disabledStr, summary.PrivateHostAdvertised, summary.ProbableAgentDiscoveries, summary.TotalSkills)
 }
 
 func summarizeA2AResults(results []*models.A2AServer) A2AJSONSummary {

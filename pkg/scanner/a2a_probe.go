@@ -738,8 +738,9 @@ func probeExtendedCard(ctx context.Context, client *http.Client, result *A2AProb
 	body, _ := json.Marshal(map[string]interface{}{
 		"jsonrpc": "2.0",
 		"id":      2,
-		"method":  "GetExtendedAgentCard",
-		"params":  map[string]interface{}{},
+		// TODO: Update if the A2A spec standardizes a slash-style extended-card method.
+		"method": "GetExtendedAgentCard",
+		"params": map[string]interface{}{},
 	})
 	req, err := http.NewRequestWithContext(ctx, "POST", rpcURL, bytes.NewReader(body))
 	if err != nil {
@@ -871,13 +872,54 @@ func boolLike(v interface{}) bool {
 }
 
 func hasSystemAdminSkill(skills []models.A2ASkill) bool {
-	keywords := []string{"system", "admin", "command", "update", "backup", "shell", "terminal", "delete", "file", "root", "sudo"}
+	highRiskTerms := []string{"shell", "terminal", "root", "sudo"}
+	adminTerms := []string{"system", "admin", "administrator", "server", "host", "os"}
+	actionTerms := []string{"command", "execute", "run", "backup", "delete", "file", "process", "service", "package", "update"}
+	highRiskPhrases := []string{
+		"system admin",
+		"system administration",
+		"system command",
+		"shell command",
+		"terminal command",
+		"execute command",
+		"run command",
+		"file system",
+		"server backup",
+	}
 	for _, skill := range skills {
 		text := strings.ToLower(skill.ID + " " + skill.Name + " " + skill.Description + " " + strings.Join(skill.Tags, " "))
-		for _, keyword := range keywords {
-			if strings.Contains(text, keyword) {
+		for _, phrase := range highRiskPhrases {
+			if strings.Contains(text, phrase) {
 				return true
 			}
+		}
+		for _, term := range highRiskTerms {
+			if containsWord(text, term) {
+				return true
+			}
+		}
+		if containsAnyWord(text, adminTerms) && containsAnyWord(text, actionTerms) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAnyWord(text string, words []string) bool {
+	for _, word := range words {
+		if containsWord(text, word) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsWord(text, word string) bool {
+	for _, field := range strings.FieldsFunc(text, func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+	}) {
+		if field == word {
+			return true
 		}
 	}
 	return false

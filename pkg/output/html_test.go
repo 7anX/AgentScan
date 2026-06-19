@@ -123,7 +123,7 @@ func TestWriteUnifiedHTMLReportsContainsBothProtocols(t *testing.T) {
 			Endpoint: "/mcp", Transport: models.TransportStreamableHTTP,
 			FingerprintScore: 0.85, NoAuth: true, ServerName: "TestMCP", ToolCount: 3,
 			Evidence: models.MCPEvidence{
-				URL: "http://127.0.0.1:8001/mcp",
+				URL:         "http://127.0.0.1:8001/mcp",
 				Fingerprint: models.FingerprintEvidence{Score: 0.85, Signals: []string{"protocol_version"}},
 				Auth:        models.AuthEvidence{Status: "no-auth", Reasons: []string{"init ok"}},
 				JSONRPC:     models.JSONRPCSummary{RequestMethod: "initialize", StatusCode: 200},
@@ -133,11 +133,11 @@ func TestWriteUnifiedHTMLReportsContainsBothProtocols(t *testing.T) {
 	a2aResults := []*models.A2AServer{
 		{
 			IP: "127.0.0.2", Port: 443, URL: "https://127.0.0.2",
-			CardURL: "https://127.0.0.2/.well-known/agent-card.json",
-			CardPath: "/.well-known/agent-card.json",
-			Profile: models.A2AProfileAgentCard,
+			CardURL:        "https://127.0.0.2/.well-known/agent-card.json",
+			CardPath:       "/.well-known/agent-card.json",
+			Profile:        models.A2AProfileAgentCard,
 			ExposureStatus: models.A2AExposureJSONRPCNoAuth,
-			A2AConfirmed: true, FingerprintScore: 0.90, NoAuth: true,
+			A2AConfirmed:   true, FingerprintScore: 0.90, NoAuth: true,
 			AgentName: "TestA2AAgent", SkillCount: 2,
 			Skills: []models.A2ASkill{{ID: "s1", Name: "Search"}},
 			Evidence: models.A2AEvidence{
@@ -145,8 +145,19 @@ func TestWriteUnifiedHTMLReportsContainsBothProtocols(t *testing.T) {
 			},
 		},
 	}
+	llmResults := []*models.LLMServer{
+		{
+			IP: "127.0.0.3", Port: 11434, URL: "http://127.0.0.3:11434",
+			Framework: "ollama", AuthStatus: "open",
+			FingerprintScore: 0.95, ModelCount: 1,
+			Models: []models.LLMModel{{ID: "llama3"}},
+			Evidence: models.LLMEvidence{
+				MatchedEndpoints: []models.LLMEndpointEvidence{{Method: "GET", Path: "/api/tags", StatusCode: 200, Matched: true}},
+			},
+		},
+	}
 
-	dir, err := WriteUnifiedHTMLReports(mcpResults, a2aResults, t.TempDir(), nil, "")
+	dir, err := WriteUnifiedHTMLReports(mcpResults, a2aResults, llmResults, t.TempDir(), nil, "")
 	if err != nil {
 		t.Fatalf("WriteUnifiedHTMLReports() error = %v", err)
 	}
@@ -154,12 +165,16 @@ func TestWriteUnifiedHTMLReportsContainsBothProtocols(t *testing.T) {
 	en := readFileForTest(t, filepath.Join(dir, "report_en.html"))
 
 	for _, want := range []string{
-		"badge-mcp", "badge-a2a",          // both protocol badges
-		"TestMCP",                           // MCP server name
-		"TestA2AAgent",                      // A2A agent name
-		"tab-mcp", "tab-a2a",               // tab panel IDs
-		"confirmed_a2a_jsonrpc_no_auth",     // A2A status
-		"127.0.0.1:8001/mcp",              // MCP target
+		"badge-mcp", "badge-a2a", // both protocol badges
+		"badge-llm",                     // LLM protocol badge
+		"TestMCP",                       // MCP server name
+		"TestA2AAgent",                  // A2A agent name
+		"ollama",                        // LLM framework
+		"llama3",                        // LLM model
+		"tab-mcp", "tab-a2a", "tab-llm", // tab panel IDs
+		"confirmed_a2a_jsonrpc_no_auth", // A2A status
+		"127.0.0.1:8001/mcp",            // MCP target
+		"127.0.0.3:11434",               // LLM target
 	} {
 		if !strings.Contains(en, want) {
 			t.Fatalf("unified report missing %q", want)
@@ -167,7 +182,7 @@ func TestWriteUnifiedHTMLReportsContainsBothProtocols(t *testing.T) {
 	}
 
 	// Text files from both protocols should exist
-	for _, name := range []string{"summary.txt", "mcp_findings.txt", "mcp_tools.txt", "a2a_no_auth.txt", "a2a_skills.txt"} {
+	for _, name := range []string{"summary.txt", "mcp_findings.txt", "mcp_tools.txt", "a2a_no_auth.txt", "a2a_skills.txt", "llm_findings.txt", "llm_models.txt"} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Fatalf("missing report file %s: %v", name, err)
 		}

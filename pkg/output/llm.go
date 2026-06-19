@@ -19,18 +19,12 @@ func PrintLLMServer(s *models.LLMServer, noColor bool) {
 
 // FprintLLMServer writes one LLM finding to a writer.
 func FprintLLMServer(w io.Writer, s *models.LLMServer, noColor bool) {
-	bold, reset, riskColor := "", "", ""
+	bold, reset, green, muted := "", "", "", ""
 	if !noColor && !NoColorEnabled() {
 		bold = "\033[1m"
 		reset = "\033[0m"
-		switch s.RiskLevel {
-		case "CRITICAL":
-			riskColor = "\033[31m\033[1m" // red bold
-		case "HIGH":
-			riskColor = "\033[31m" // red
-		case "MEDIUM":
-			riskColor = "\033[33m\033[1m" // yellow bold
-		}
+		green = "\033[32m"
+		muted = "\033[90m"
 	}
 
 	target := fmt.Sprintf("%s:%d", s.IP, s.Port)
@@ -38,12 +32,22 @@ func FprintLLMServer(w io.Writer, s *models.LLMServer, noColor bool) {
 		target = fmt.Sprintf("%s:%d", s.Hostname, s.Port)
 	}
 
-	fmt.Fprintf(w, "%s[LLM]%s %-25s %-15s %-14s %s%-8s%s  models=%d  score=%.2f\n",
+	// Auth status color: open=green(bold), auth_required=yellow(bold)
+	authColor := ""
+	if !noColor && !NoColorEnabled() {
+		switch s.AuthStatus {
+		case "open":
+			authColor = "\033[32m\033[1m"
+		case "auth_required":
+			authColor = "\033[33m\033[1m"
+		}
+	}
+
+	fmt.Fprintf(w, "%s[LLM]%s %-25s %-15s %s%-14s%s models=%d  score=%.2f\n",
 		bold, reset,
 		target,
 		s.Framework,
-		s.AuthStatus,
-		riskColor, s.RiskLevel, reset,
+		authColor, s.AuthStatus, reset,
 		s.ModelCount,
 		s.FingerprintScore,
 	)
@@ -57,6 +61,22 @@ func FprintLLMServer(w io.Writer, s *models.LLMServer, noColor bool) {
 		}
 		fmt.Fprintf(w, "      models   %s\n", strings.Join(names, ", "))
 	}
+	// List matched endpoints
+	for _, ep := range s.Evidence.MatchedEndpoints {
+		if !ep.Matched {
+			continue
+		}
+		fieldsStr := ""
+		if ep.ResponseFieldCount > 0 {
+			fieldsStr = fmt.Sprintf(" fields=%d", ep.ResponseFieldCount)
+		}
+		fmt.Fprintf(w, "      %shit%s      %s %-20s → %s%d%s %s(%.0fms)%s%s\n",
+			green, reset,
+			ep.Method, ep.Path,
+			bold, ep.StatusCode, reset,
+			muted, ep.ResponseMs, reset,
+			fieldsStr)
+	}
 	fmt.Fprintln(w)
 }
 
@@ -67,23 +87,23 @@ func PrintLLMSummary(results []*models.LLMServer, noColor bool) {
 
 // FprintLLMSummary writes the LLM scan summary to a writer.
 func FprintLLMSummary(w io.Writer, results []*models.LLMServer, noColor bool) {
-	bold, reset := "", ""
+	bold, reset, red := "", "", ""
 	if !noColor && !NoColorEnabled() {
 		bold = "\033[1m"
 		reset = "\033[0m"
+		red = "\033[31m"
 	}
 
 	summary := summarizeLLMResults(results)
 
-	fmt.Fprintf(w, "\n%s── LLM Summary ──%s\n", bold, reset)
-	fmt.Fprintf(w, "  Total:     %d\n", summary.Total)
-	fmt.Fprintf(w, "  Open:      %d\n", summary.Open)
-	fmt.Fprintf(w, "  Auth-req:  %d\n", summary.AuthRequired)
-	fmt.Fprintf(w, "  Critical:  %d\n", summary.Critical)
-	fmt.Fprintf(w, "  High:      %d\n", summary.High)
-	fmt.Fprintf(w, "  Medium:    %d\n", summary.Medium)
-	fmt.Fprintf(w, "  Models:    %d\n", summary.TotalModels)
-	fmt.Fprintln(w)
+	// open count — red if > 0
+	openStr := fmt.Sprintf("open=%d", summary.Open)
+	if summary.Open > 0 {
+		openStr = fmt.Sprintf("%sopen=%d%s", red, summary.Open, reset)
+	}
+
+	fmt.Fprintf(w, "%sSummary%s  LLM=%d  %s  auth-req=%d  models=%d\n",
+		bold, reset, summary.Total, openStr, summary.AuthRequired, summary.TotalModels)
 }
 
 // ── JSON output ─────────────────────────────────────────────────────────────
@@ -101,9 +121,6 @@ type LLMJSONSummary struct {
 	Open          int `json:"open"`
 	AuthRequired  int `json:"auth_required"`
 	PartiallyOpen int `json:"partially_open"`
-	Critical      int `json:"critical"`
-	High          int `json:"high"`
-	Medium        int `json:"medium"`
 	TotalModels   int `json:"total_models"`
 }
 
@@ -141,14 +158,6 @@ func summarizeLLMResults(results []*models.LLMServer) LLMJSONSummary {
 			s.AuthRequired++
 		case "partially_open":
 			s.PartiallyOpen++
-		}
-		switch r.RiskLevel {
-		case "CRITICAL":
-			s.Critical++
-		case "HIGH":
-			s.High++
-		case "MEDIUM":
-			s.Medium++
 		}
 		s.TotalModels += r.ModelCount
 	}

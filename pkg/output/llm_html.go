@@ -95,13 +95,23 @@ func writeLLMTextReports(reportDir string, results []*models.LLMServer) error {
 func buildLLMFindingsText(results []*models.LLMServer, filter func(*models.LLMServer) bool) string {
 	var b strings.Builder
 	b.WriteString("# AgentScan LLM 扫描发现\n")
-	b.WriteString("# URL\t框架\t版本\t认证\t风险\t模型数\n\n")
+	b.WriteString("# URL\t框架\t版本\t认证\t模型数\t命中端点\n\n")
+	headerLen := b.Len()
 	for _, r := range results {
 		if filter != nil && !filter(r) {
 			continue
 		}
-		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%d\n",
-			r.URL, r.Framework, r.FrameworkVersion, r.AuthStatus, r.RiskLevel, r.ModelCount)
+		hitPaths := make([]string, 0)
+		for _, ep := range r.Evidence.MatchedEndpoints {
+			if ep.Matched {
+				hitPaths = append(hitPaths, ep.Path)
+			}
+		}
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%d\t%s\n",
+			r.URL, r.Framework, r.FrameworkVersion, r.AuthStatus, r.ModelCount, strings.Join(hitPaths, ","))
+	}
+	if b.Len() == headerLen {
+		return ""
 	}
 	return b.String()
 }
@@ -126,14 +136,10 @@ func buildLLMEvidenceText(results []*models.LLMServer) string {
 		for _, ep := range r.Evidence.MatchedEndpoints {
 			matched := "✗"
 			if ep.Matched {
-				matched = "✓"
+				matched = "✓ 命中"
 			}
-			matchLabel := ""
-			if ep.Matched {
-				matchLabel = "命中"
-			}
-			fmt.Fprintf(&b, "  %s %s %s → %d (%.0fms) %s\n",
-				matched, ep.Method, ep.Path, ep.StatusCode, ep.ResponseMs, matchLabel)
+			fmt.Fprintf(&b, "  %s %s %s → %d (%.0fms)\n",
+				matched, ep.Method, ep.Path, ep.StatusCode, ep.ResponseMs)
 		}
 		b.WriteString("\n")
 	}
@@ -148,9 +154,6 @@ func buildLLMSummaryText(results []*models.LLMServer) string {
 	fmt.Fprintf(&b, "发现总数:      %d\n", summary.Total)
 	fmt.Fprintf(&b, "开放(无认证):  %d\n", summary.Open)
 	fmt.Fprintf(&b, "需要认证:      %d\n", summary.AuthRequired)
-	fmt.Fprintf(&b, "严重风险:      %d\n", summary.Critical)
-	fmt.Fprintf(&b, "高危风险:      %d\n", summary.High)
-	fmt.Fprintf(&b, "中危风险:      %d\n", summary.Medium)
 	fmt.Fprintf(&b, "暴露模型:      %d\n", summary.TotalModels)
 	return b.String()
 }

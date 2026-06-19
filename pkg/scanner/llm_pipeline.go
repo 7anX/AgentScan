@@ -80,7 +80,7 @@ func (p *LLMPipeline) Run(ctx context.Context, targets []target.Target) []*model
 }
 
 // RunFromCandidates runs LLM probes against already-filtered HTTP candidates.
-// Used by agentscan scan to share port scan and HTTP filter results with MCP and A2A.
+// Used by agentscan scan to reuse the shared port scan and HTTP filter results.
 func (p *LLMPipeline) RunFromCandidates(ctx context.Context, candidates []HTTPCandidate) []*models.LLMServer {
 	if len(candidates) == 0 {
 		return nil
@@ -171,9 +171,11 @@ done:
 	close(stopProgress)
 	progressWG.Wait()
 
-	// Sort by risk: CRITICAL > HIGH > MEDIUM > INFO
+	fmt.Fprintf(os.Stderr, "      %d confirmed\n\n", len(results))
+
+	// Sort by fingerprint score (highest first)
 	sort.Slice(results, func(i, j int) bool {
-		return riskOrder(results[i].RiskLevel) < riskOrder(results[j].RiskLevel)
+		return results[i].FingerprintScore > results[j].FingerprintScore
 	})
 
 	return results
@@ -205,23 +207,6 @@ func llmCandidateTimeout(cfg models.ScanConfig) time.Duration {
 		return 30 * time.Second
 	}
 	return t
-}
-
-func riskOrder(level string) int {
-	switch level {
-	case "CRITICAL":
-		return 0
-	case "HIGH":
-		return 1
-	case "MEDIUM":
-		return 2
-	case "LOW":
-		return 3
-	case "INFO":
-		return 4
-	default:
-		return 5
-	}
 }
 
 // RunLLMScan is the convenience entry point for the standalone `agentscan llm` command.

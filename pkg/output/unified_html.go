@@ -49,7 +49,6 @@ type unifiedLLMServer struct {
 	Framework          string
 	FrameworkVersion   string
 	AuthStatus         string
-	RiskLevel          string
 	StatusClass        string
 	FingerprintScore   string
 	ModelCount         int
@@ -158,9 +157,6 @@ func writeA2ASection(w io.Writer, results []*models.A2AServer, lang reportLangua
 	return nil
 }
 
-func buildUnifiedA2AServers(results []*models.A2AServer) []unifiedA2AServer {
-	return buildUnifiedA2AServersLang(results, false)
-}
 
 func buildUnifiedA2AServersLang(results []*models.A2AServer, zh bool) []unifiedA2AServer {
 	servers := make([]unifiedA2AServer, 0, len(results))
@@ -196,10 +192,10 @@ func buildUnifiedLLMServers(results []*models.LLMServer) []unifiedLLMServer {
 	servers := make([]unifiedLLMServer, 0, len(results))
 	for _, r := range results {
 		statusClass := "pill status-neutral"
-		switch r.RiskLevel {
-		case "CRITICAL", "HIGH":
+		switch r.AuthStatus {
+		case "open":
 			statusClass = "pill status-danger"
-		case "MEDIUM":
+		case "auth_required":
 			statusClass = "pill status-warning"
 		}
 		target := fmt.Sprintf("%s:%d", r.IP, r.Port)
@@ -220,7 +216,6 @@ func buildUnifiedLLMServers(results []*models.LLMServer) []unifiedLLMServer {
 			Framework:          r.Framework,
 			FrameworkVersion:   r.FrameworkVersion,
 			AuthStatus:         r.AuthStatus,
-			RiskLevel:          r.RiskLevel,
 			StatusClass:        statusClass,
 			FingerprintScore:   fmt.Sprintf("%.2f", r.FingerprintScore),
 			ModelCount:         r.ModelCount,
@@ -567,25 +562,25 @@ const a2aSectionHTML = `
                   <div class="kv"><span>{{$.Lang.Protocol}}</span>{{.Profile}}</div>
                   <div class="kv"><span>{{$.Lang.Status}}</span><span class="{{.StatusClass}}">{{.ExposureStatus}}</span></div>
                   <div class="kv"><span>{{$.Lang.Score}}</span>{{.FingerprintScore}}</div>
-                  {{if .DeclaredAuth}}<div class="kv"><span>Declared Auth</span>{{.DeclaredAuth}}</div>{{end}}
+                  {{if .DeclaredAuth}}<div class="kv"><span>{{$.Lang.A2ADeclaredAuth}}</span>{{.DeclaredAuth}}</div>{{end}}
                 </div>
                 <div class="evidence-grid">
-                  <div class="kv wide"><span>Card URL</span><code>{{.CardURL}}</code></div>
-                  {{if .ExposureSignals}}<div class="kv wide"><span>Exposure Signals</span><div>{{range (splitComma .ExposureSignals)}}<span class="tag">{{.}}</span>{{end}}</div></div>{{end}}
+                  <div class="kv wide"><span>{{$.Lang.A2ACardURL}}</span><code>{{.CardURL}}</code></div>
+                  {{if .ExposureSignals}}<div class="kv wide"><span>{{$.Lang.A2AExposureSignals}}</span><div>{{range (splitComma .ExposureSignals)}}<span class="tag">{{.}}</span>{{end}}</div></div>{{end}}
                   {{if .AuthReasons}}<div class="kv wide"><span>{{$.Lang.AuthReasons}}</span><div class="reason-list">{{range .AuthReasons}}<div>{{.}}</div>{{end}}</div></div>{{end}}
                 </div>
                 {{if .Interfaces}}
-                <h3>Interfaces</h3>
+                <h3>{{$.Lang.A2AInterfaces}}</h3>
                 {{range .Interfaces}}
                 <div style="font-size:13px;padding:6px 0;border-bottom:1px solid var(--line)">
                   <span class="{{a2aIfaceStatusClass .Status}}">{{.Status}}</span>
                   &nbsp;<code>{{.URL}}</code>&nbsp;<span class="muted">{{.Binding}}</span>
-                  {{if .PrivateHostAdvertised}}<br><span class="muted">advertised: {{.AdvertisedURL}}</span>{{end}}
+                  {{if .PrivateHostAdvertised}}<br><span class="muted">{{$.Lang.A2AAdvertised}}: {{.AdvertisedURL}}</span>{{end}}
                 </div>
                 {{end}}
                 {{end}}
                 {{if .HasSkills}}
-                <h3>Skills</h3>
+                <h3>{{$.Lang.A2ASkills}}</h3>
                 <ul>{{range .Skills}}<li><strong>{{if .Name}}{{.Name}}{{else}}{{.ID}}{{end}}</strong>{{if .Description}} <span class="description">{{.Description}}</span>{{end}}</li>{{end}}</ul>
                 {{end}}
               </div>
@@ -595,7 +590,7 @@ const a2aSectionHTML = `
         </tbody>
       </table>
     </div>
-    {{else}}<div class="empty">No A2A agents found.</div>{{end}}
+    {{else}}<div class="empty">{{.Lang.A2ANoResults}}</div>{{end}}
 `
 
 const llmSectionHTML = `
@@ -607,27 +602,24 @@ const llmSectionHTML = `
             <th><button type="button" data-sort="target" data-type="text">{{.Lang.Target}}</button></th>
             <th><button type="button" data-sort="framework" data-type="text">{{.Lang.LLMFramework}}</button></th>
             <th><button type="button" data-sort="auth" data-type="text">{{.Lang.LLMAuthStatus}}</button></th>
-            <th><button type="button" data-sort="risk" data-type="text">{{.Lang.LLMRiskLevel}}</button></th>
             <th><button type="button" data-sort="models" data-type="number">{{.Lang.LLMModels}}</button></th>
             <th><button type="button" data-sort="score" data-type="number">{{.Lang.Score}}</button></th>
           </tr>
         </thead>
         <tbody>
           {{range .LLMServers}}
-          <tr class="expandable-row" data-target="{{.Target}}" data-framework="{{.Framework}}" data-auth="{{.AuthStatus}}" data-risk="{{.RiskLevel}}" data-models="{{.ModelCount}}" data-score="{{.FingerprintScore}}">
+          <tr class="expandable-row" data-target="{{.Target}}" data-framework="{{.Framework}}" data-auth="{{.AuthStatus}}" data-models="{{.ModelCount}}" data-score="{{.FingerprintScore}}">
             <td><code>{{.Target}}</code></td>
             <td>{{.Framework}}{{if .FrameworkVersion}} <span class="muted">{{.FrameworkVersion}}</span>{{end}}</td>
-            <td>{{.AuthStatus}}</td>
-            <td><span class="{{.StatusClass}}">{{.RiskLevel}}</span></td>
+            <td><span class="{{.StatusClass}}">{{.AuthStatus}}</span></td>
             <td>{{.ModelCount}}</td>
             <td>{{.FingerprintScore}}</td>
           </tr>
-          <tr class="detail-row" style="display:none"><td colspan="6">
+          <tr class="detail-row" style="display:none"><td colspan="5">
             <div class="detail-body">
               <div class="detail-grid">
                 <div class="kv"><span>{{$.Lang.LLMFramework}}</span><div>{{.Framework}}{{if .FrameworkVersion}} {{.FrameworkVersion}}{{end}}</div></div>
-                <div class="kv"><span>{{$.Lang.LLMAuthStatus}}</span><div>{{.AuthStatus}}</div></div>
-                <div class="kv"><span>{{$.Lang.LLMRiskLevel}}</span><div><span class="{{.StatusClass}}">{{.RiskLevel}}</span></div></div>
+                <div class="kv"><span>{{$.Lang.LLMAuthStatus}}</span><div><span class="{{.StatusClass}}">{{.AuthStatus}}</span></div></div>
                 <div class="kv"><span>{{$.Lang.Score}}</span><div>{{.FingerprintScore}}</div></div>
                 {{if .URL}}<div class="kv"><span>URL</span><div><code>{{.URL}}</code></div></div>{{end}}
                 {{if .ResponseTimeMs}}<div class="kv"><span>{{$.Lang.LLMResponseTime}}</span><div>{{.ResponseTimeMs}}</div></div>{{end}}
@@ -643,7 +635,7 @@ const llmSectionHTML = `
               <p style="margin:4px 0;color:var(--muted);font-size:13px">{{.AuthReasons}}</p>
               {{end}}
               {{if .NegativeSignals}}
-              <h3>Negative Signals</h3>
+              <h3>{{$.Lang.LLMNegativeSignals}}</h3>
               <div style="margin-bottom:10px">{{range (splitComma .NegativeSignals)}}<span class="tag" style="background:#f9fafb;color:var(--muted)">{{.}}</span>{{end}}</div>
               {{end}}
               {{if .EvidenceEndpoints}}
@@ -679,7 +671,7 @@ const llmSectionHTML = `
         </tbody>
       </table>
     </div>
-    {{else}}<div class="empty">No LLM APIs found.</div>{{end}}
+    {{else}}<div class="empty">{{.Lang.LLMNoResults}}</div>{{end}}
 `
 
 var unifiedTemplate = template.Must(template.New("unified").Funcs(tmplFuncs).Parse(`<!doctype html>
@@ -713,20 +705,19 @@ var unifiedTemplate = template.Must(template.New("unified").Funcs(tmplFuncs).Par
         <span class="protocol-badge badge-a2a">A2A</span>
       </div>
       <div class="summary-grid">
-        <div class="card"><div class="metric">Agents</div><div class="value">{{.A2ASummary.Total}}</div></div>
-        <div class="card"><div class="metric">No-Auth RPC</div><div class="value">{{.A2ASummary.NoAuthJSONRPC}}</div></div>
+        <div class="card"><div class="metric">{{.Lang.A2AAgents}}</div><div class="value">{{.A2ASummary.Total}}</div></div>
+        <div class="card"><div class="metric">{{.Lang.A2ANoAuthRPC}}</div><div class="value">{{.A2ASummary.NoAuthJSONRPC}}</div></div>
         <div class="card"><div class="metric">{{.Lang.AuthRequired}}</div><div class="value">{{.A2ASummary.AuthRequired}}</div></div>
-        <div class="card"><div class="metric">Disabled</div><div class="value">{{.A2ASummary.EndpointDisabled}}</div></div>
-        <div class="card"><div class="metric">Skills</div><div class="value">{{.A2ASummary.TotalSkills}}</div></div>
+        <div class="card"><div class="metric">{{.Lang.A2ADisabled}}</div><div class="value">{{.A2ASummary.EndpointDisabled}}</div></div>
+        <div class="card"><div class="metric">{{.Lang.A2ASkills}}</div><div class="value">{{.A2ASummary.TotalSkills}}</div></div>
       </div>
       <div style="margin:16px 0 6px;font-size:13px;font-weight:600;color:var(--muted)">
         <span class="protocol-badge badge-llm">LLM</span>
       </div>
       <div class="summary-grid">
-        <div class="card"><div class="metric">APIs</div><div class="value">{{.LLMSummary.Total}}</div></div>
+        <div class="card"><div class="metric">{{.Lang.LLMAPIs}}</div><div class="value">{{.LLMSummary.Total}}</div></div>
         <div class="card"><div class="metric">{{.Lang.LLMOpen}}</div><div class="value">{{.LLMSummary.Open}}</div></div>
         <div class="card"><div class="metric">{{.Lang.AuthRequired}}</div><div class="value">{{.LLMSummary.AuthRequired}}</div></div>
-        <div class="card"><div class="metric">{{.Lang.LLMHighCritical}}</div><div class="value">{{add .LLMSummary.High .LLMSummary.Critical}}</div></div>
         <div class="card"><div class="metric">{{.Lang.LLMModels}}</div><div class="value">{{.LLMSummary.TotalModels}}</div></div>
       </div>
     </section>
@@ -737,10 +728,10 @@ var unifiedTemplate = template.Must(template.New("unified").Funcs(tmplFuncs).Par
           <span class="protocol-badge badge-mcp">MCP</span> {{.Lang.Results}} ({{len .MCPServers}})
         </button>
         <button class="tab-btn" data-tab="tab-a2a">
-          <span class="protocol-badge badge-a2a">A2A</span> Agents ({{len .A2AServers}})
+          <span class="protocol-badge badge-a2a">A2A</span> {{.Lang.A2AAgents}} ({{len .A2AServers}})
         </button>
         <button class="tab-btn" data-tab="tab-llm">
-          <span class="protocol-badge badge-llm">LLM</span> APIs ({{len .LLMServers}})
+          <span class="protocol-badge badge-llm">LLM</span> {{.Lang.LLMAPIs}} ({{len .LLMServers}})
         </button>
       </div>
 
@@ -779,12 +770,12 @@ var standaloneA2ATemplate = template.Must(template.New("a2a-standalone").Funcs(t
     <section>
       <h2>{{.Lang.Summary}}</h2>
       <div class="summary-grid">
-        <div class="card"><div class="metric">Agents</div><div class="value">{{.A2ASummary.Total}}</div></div>
-        <div class="card"><div class="metric">No-Auth RPC</div><div class="value">{{.A2ASummary.NoAuthJSONRPC}}</div></div>
+        <div class="card"><div class="metric">{{.Lang.A2AAgents}}</div><div class="value">{{.A2ASummary.Total}}</div></div>
+        <div class="card"><div class="metric">{{.Lang.A2ANoAuthRPC}}</div><div class="value">{{.A2ASummary.NoAuthJSONRPC}}</div></div>
         <div class="card"><div class="metric">{{.Lang.AuthRequired}}</div><div class="value">{{.A2ASummary.AuthRequired}}</div></div>
-        <div class="card"><div class="metric">Disabled</div><div class="value">{{.A2ASummary.EndpointDisabled}}</div></div>
-        <div class="card"><div class="metric">Private Host</div><div class="value">{{.A2ASummary.PrivateHostAdvertised}}</div></div>
-        <div class="card"><div class="metric">Skills</div><div class="value">{{.A2ASummary.TotalSkills}}</div></div>
+        <div class="card"><div class="metric">{{.Lang.A2ADisabled}}</div><div class="value">{{.A2ASummary.EndpointDisabled}}</div></div>
+        <div class="card"><div class="metric">{{.Lang.A2APrivateHost}}</div><div class="value">{{.A2ASummary.PrivateHostAdvertised}}</div></div>
+        <div class="card"><div class="metric">{{.Lang.A2ASkills}}</div><div class="value">{{.A2ASummary.TotalSkills}}</div></div>
       </div>
     </section>
     <section>
@@ -814,10 +805,9 @@ var standaloneLLMTemplate = template.Must(template.New("llm-standalone").Funcs(t
     <section>
       <h2>{{.Lang.Summary}}</h2>
       <div class="summary-grid">
-        <div class="card"><div class="metric">APIs</div><div class="value">{{.LLMSummary.Total}}</div></div>
+        <div class="card"><div class="metric">{{.Lang.LLMAPIs}}</div><div class="value">{{.LLMSummary.Total}}</div></div>
         <div class="card"><div class="metric">{{.Lang.LLMOpen}}</div><div class="value">{{.LLMSummary.Open}}</div></div>
         <div class="card"><div class="metric">{{.Lang.AuthRequired}}</div><div class="value">{{.LLMSummary.AuthRequired}}</div></div>
-        <div class="card"><div class="metric">{{.Lang.LLMHighCritical}}</div><div class="value">{{add .LLMSummary.High .LLMSummary.Critical}}</div></div>
         <div class="card"><div class="metric">{{.Lang.LLMModels}}</div><div class="value">{{.LLMSummary.TotalModels}}</div></div>
       </div>
     </section>
@@ -856,9 +846,6 @@ func buildUnifiedSummaryText(mcpResults []*models.MCPServer, a2aResults []*model
 	fmt.Fprintf(&b, "Total:         %d\n", llm.Total)
 	fmt.Fprintf(&b, "Open:          %d\n", llm.Open)
 	fmt.Fprintf(&b, "Auth required: %d\n", llm.AuthRequired)
-	fmt.Fprintf(&b, "Critical:      %d\n", llm.Critical)
-	fmt.Fprintf(&b, "High:          %d\n", llm.High)
-	fmt.Fprintf(&b, "Medium:        %d\n", llm.Medium)
 	fmt.Fprintf(&b, "Models:        %d\n", llm.TotalModels)
 	return b.String()
 }

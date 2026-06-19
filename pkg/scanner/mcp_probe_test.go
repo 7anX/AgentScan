@@ -50,6 +50,61 @@ func TestSSEProbeSessionTimeoutIsBounded(t *testing.T) {
 	}
 }
 
+func TestStreamableProbeTimeoutIsBoundedByConfig(t *testing.T) {
+	if got := streamableProbeTimeout(200 * time.Millisecond); got != 200*time.Millisecond {
+		t.Fatalf("short timeout = %v, want 200ms", got)
+	}
+	if got := streamableProbeTimeout(10 * time.Second); got != 3*time.Second {
+		t.Fatalf("long timeout = %v, want 3s", got)
+	}
+}
+
+func TestTryStreamableHTTPFollowsConfiguredTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(time.Second):
+			w.WriteHeader(http.StatusOK)
+		case <-r.Context().Done():
+			return
+		}
+	}))
+	defer server.Close()
+
+	client := buildHTTPClient("", 50*time.Millisecond)
+	start := time.Now()
+	got := tryStreamableHTTP(context.Background(), client, server.URL+"/mcp", "/mcp", 50*time.Millisecond, nil)
+	if got != nil {
+		t.Fatalf("tryStreamableHTTP() = %#v, want nil after timeout", got)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("tryStreamableHTTP elapsed = %v, want under 500ms", elapsed)
+	}
+}
+
+func TestMCPAuthRequiredRejectsGeneric401OnKnownPath(t *testing.T) {
+	resp := httptest.NewRecorder()
+	resp.Header().Set("Content-Type", "text/html")
+	resp.WriteHeader(http.StatusUnauthorized)
+	_, _ = resp.WriteString("login required")
+
+	got, evidence := isMCPAuthRequiredWithEvidence(resp.Result(), "/mcp", map[string]bool{"/mcp": true})
+	if got {
+		t.Fatalf("auth-required = true, want false; evidence=%#v", evidence)
+	}
+}
+
+func TestMCPAuthRequiredAcceptsJSONRPC401(t *testing.T) {
+	resp := httptest.NewRecorder()
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(http.StatusUnauthorized)
+	_, _ = resp.WriteString(`{"jsonrpc":"2.0","error":{"code":-32001,"message":"unauthorized"}}`)
+
+	got, evidence := isMCPAuthRequiredWithEvidence(resp.Result(), "/mcp", map[string]bool{"/mcp": true})
+	if !got {
+		t.Fatalf("auth-required = false, want true; evidence=%#v", evidence)
+	}
+}
+
 func TestProbeMCPWithHostnameFindsSSEUnderMountPrefix(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/prefix/sse" && r.Method == http.MethodGet {

@@ -64,9 +64,6 @@ func TestEngineOllamaDetection(t *testing.T) {
 	if result.AuthStatus != "open" {
 		t.Errorf("AuthStatus = %q, want %q", result.AuthStatus, "open")
 	}
-	if result.RiskLevel != "CRITICAL" {
-		t.Errorf("RiskLevel = %q, want %q", result.RiskLevel, "CRITICAL")
-	}
 	if result.Score <= 0 {
 		t.Errorf("Score = %f, want > 0", result.Score)
 	}
@@ -140,9 +137,6 @@ func TestEngineAuthRequired(t *testing.T) {
 	if result.AuthStatus != "auth_required" {
 		t.Errorf("AuthStatus = %q, want %q", result.AuthStatus, "auth_required")
 	}
-	if result.RiskLevel != "MEDIUM" {
-		t.Errorf("RiskLevel = %q, want %q", result.RiskLevel, "MEDIUM")
-	}
 }
 
 func TestEngineTemplateCount(t *testing.T) {
@@ -159,50 +153,3 @@ func TestEngineTemplateCount(t *testing.T) {
 	}
 }
 
-func TestEvaluateRisk(t *testing.T) {
-	risk := &RiskMatrix{
-		OpenWithModels: "critical",
-		OpenNoModels:   "high",
-		AuthRequired:   "medium",
-	}
-
-	tests := []struct {
-		auth   string
-		models int
-		expect string
-	}{
-		{"open", 5, "CRITICAL"},
-		{"open", 0, "HIGH"},
-		{"auth_required", 0, "MEDIUM"},
-		{"auth_required", 3, "MEDIUM"},
-		{"unknown", 0, "INFO"},
-	}
-
-	for _, tt := range tests {
-		got := evaluateRisk(risk, tt.auth, tt.models)
-		if got != tt.expect {
-			t.Errorf("evaluateRisk(%q, %d) = %q, want %q", tt.auth, tt.models, got, tt.expect)
-		}
-	}
-}
-
-func TestEvaluateRiskDefaults(t *testing.T) {
-	// No risk matrix → use defaults
-	tests := []struct {
-		auth   string
-		models int
-		expect string
-	}{
-		{"open", 5, "CRITICAL"},
-		{"open", 0, "HIGH"},
-		{"auth_required", 0, "MEDIUM"},
-		{"unknown", 0, "INFO"},
-	}
-
-	for _, tt := range tests {
-		got := evaluateRisk(nil, tt.auth, tt.models)
-		if got != tt.expect {
-			t.Errorf("evaluateRisk(nil, %q, %d) = %q, want %q", tt.auth, tt.models, got, tt.expect)
-		}
-	}
-}

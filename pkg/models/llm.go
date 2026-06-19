@@ -17,7 +17,6 @@ type LLMServer struct {
 	Models           []LLMModel      `json:"models,omitempty"`
 	ModelCount       int             `json:"model_count"`
 	AuthStatus       string          `json:"auth_status"`        // "open" | "auth_required" | "unknown"
-	RiskLevel        string          `json:"risk_level"`         // "CRITICAL" | "HIGH" | "MEDIUM" | "INFO"
 	FingerprintScore float64         `json:"fingerprint_score"`
 	TLSEnabled       bool            `json:"tls_enabled"`
 	ResponseTimeMs   float64         `json:"response_time_ms"`
@@ -41,9 +40,10 @@ type LLMEvidence struct {
 
 // LLMEndpointEvidence captures proof from a single probed endpoint.
 type LLMEndpointEvidence struct {
-	Method     string  `json:"method"`
-	Path       string  `json:"path"`
-	StatusCode int     `json:"status_code"`
-	Matched    bool    `json:"matched"`
-	ResponseMs float64 `json:"response_ms"`
+	Method             string  `json:"method"`
+	Path               string  `json:"path"`
+	StatusCode         int     `json:"status_code"`
+	Matched            bool    `json:"matched"`
+	ResponseMs         float64 `json:"response_ms"`
+	ResponseFieldCount int     `json:"response_field_count,omitempty"` // top-level JSON fields
 }

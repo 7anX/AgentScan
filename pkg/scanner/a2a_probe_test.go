@@ -166,7 +166,7 @@ func TestProbeA2AExtendedCardNoAuth(t *testing.T) {
 					"jsonrpc": "2.0",
 					"id":      req["id"],
 					"result": map[string]interface{}{
-						"name":  "Extended LangChain Card",
+						"name":   "Extended LangChain Card",
 						"skills": []interface{}{},
 					},
 				})
@@ -207,22 +207,22 @@ func TestProbeA2ADeclaredAuthDetection(t *testing.T) {
 		{
 			name: "no_security_fields",
 			card: map[string]interface{}{
-				"name":        "Open Agent",
-				"description": "No auth",
-				"url":         "/a2a",
+				"name":         "Open Agent",
+				"description":  "No auth",
+				"url":          "/a2a",
 				"capabilities": map[string]interface{}{"streaming": false},
-				"skills":      []interface{}{map[string]interface{}{"id": "x", "name": "x"}},
+				"skills":       []interface{}{map[string]interface{}{"id": "x", "name": "x"}},
 			},
 			wantDeclared: "declared_none",
 		},
 		{
 			name: "security_array_present",
 			card: map[string]interface{}{
-				"name":        "Secure Agent",
-				"description": "Requires auth",
-				"url":         "/a2a",
+				"name":         "Secure Agent",
+				"description":  "Requires auth",
+				"url":          "/a2a",
 				"capabilities": map[string]interface{}{"streaming": false},
-				"skills":      []interface{}{map[string]interface{}{"id": "x", "name": "x"}},
+				"skills":       []interface{}{map[string]interface{}{"id": "x", "name": "x"}},
 				"securitySchemes": map[string]interface{}{
 					"bearer": map[string]interface{}{"type": "http", "scheme": "bearer"},
 				},
@@ -235,11 +235,11 @@ func TestProbeA2ADeclaredAuthDetection(t *testing.T) {
 		{
 			name: "schemes_only_no_requirements",
 			card: map[string]interface{}{
-				"name":        "Ambiguous Agent",
-				"description": "Has schemes but no requirements",
-				"url":         "/a2a",
+				"name":         "Ambiguous Agent",
+				"description":  "Has schemes but no requirements",
+				"url":          "/a2a",
 				"capabilities": map[string]interface{}{"streaming": false},
-				"skills":      []interface{}{map[string]interface{}{"id": "x", "name": "x"}},
+				"skills":       []interface{}{map[string]interface{}{"id": "x", "name": "x"}},
 				"securitySchemes": map[string]interface{}{
 					"bearer": map[string]interface{}{"type": "http"},
 				},
@@ -272,6 +272,25 @@ func TestProbeA2ADeclaredAuthDetection(t *testing.T) {
 				t.Fatalf("declared auth = %q, want %q", got.Evidence.Auth.Declared, tt.wantDeclared)
 			}
 		})
+	}
+}
+
+func TestHasSystemAdminSkillAvoidsSingleGenericWords(t *testing.T) {
+	skills := []models.A2ASkill{
+		{ID: "calendar", Name: "Calendar Updates", Description: "Update my calendar from voice commands"},
+		{ID: "order-status", Name: "Order Status", Description: "Update order status for customers"},
+	}
+	if hasSystemAdminSkill(skills) {
+		t.Fatalf("hasSystemAdminSkill() = true, want false for generic update/command skills")
+	}
+}
+
+func TestHasSystemAdminSkillDetectsAdminCommandCombinations(t *testing.T) {
+	skills := []models.A2ASkill{
+		{ID: "ops", Name: "System Maintenance", Description: "Run package updates and service backups"},
+	}
+	if !hasSystemAdminSkill(skills) {
+		t.Fatalf("hasSystemAdminSkill() = false, want true for system maintenance actions")
 	}
 }
 
