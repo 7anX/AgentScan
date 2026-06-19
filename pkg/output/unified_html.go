@@ -286,6 +286,11 @@ const sharedCSS = `
     .description { color: var(--muted); margin-left: 4px; }
     .empty { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px; color: var(--muted); }
     .tag { display: inline-block; background: #eef2f6; border-radius: 4px; padding: 1px 6px; font-size: 12px; margin: 1px; }
+    .expandable-row { cursor: pointer; }
+    .expandable-row:hover { background: #f0f4f8; }
+    .expandable-row.expanded { background: #f0f9f7; }
+    .detail-row td { padding: 0; background: #fbfcfd; }
+    .detail-row .detail-body { padding: 12px 16px 16px; }
     /* Tabs */
     .tabs { display: flex; gap: 0; border-bottom: 2px solid var(--line); margin-bottom: 24px; }
     .tab-btn {
@@ -313,23 +318,41 @@ const sharedCSS = `
 
 const tableSortJS = `
   (() => {
+    // Row expand/collapse
+    document.querySelectorAll(".expandable-row").forEach(row => {
+      row.addEventListener("click", () => {
+        const detail = row.nextElementSibling;
+        if (!detail || !detail.classList.contains("detail-row")) return;
+        const open = detail.style.display !== "none";
+        detail.style.display = open ? "none" : "table-row";
+        row.classList.toggle("expanded", !open);
+      });
+    });
+    // Table sorting (moves detail-row together with its parent)
     document.querySelectorAll("table[id]").forEach(table => {
       const tbody = table.querySelector("tbody");
       if (!tbody) return;
       let activeKey = "", activeDir = "desc";
       table.querySelectorAll("button[data-sort]").forEach(button => {
-        button.addEventListener("click", () => {
+        button.addEventListener("click", e => {
+          e.stopPropagation();
           const key = button.dataset.sort, type = button.dataset.type;
           activeDir = activeKey === key && activeDir === "desc" ? "asc" : "desc";
           activeKey = key;
-          const rows = Array.from(tbody.querySelectorAll("tr"));
-          rows.sort((a, b) => {
-            const av = a.dataset[key] || "", bv = b.dataset[key] || "";
+          // collect row pairs: [expandable-row, detail-row]
+          const pairs = [];
+          const rows = Array.from(tbody.querySelectorAll("tr.expandable-row"));
+          rows.forEach(r => {
+            const detail = r.nextElementSibling;
+            pairs.push({ main: r, detail: detail && detail.classList.contains("detail-row") ? detail : null });
+          });
+          pairs.sort((a, b) => {
+            const av = a.main.dataset[key] || "", bv = b.main.dataset[key] || "";
             let cmp = type === "number" ? (Number(av)||0)-(Number(bv)||0)
                       : av.localeCompare(bv, undefined, {numeric:true, sensitivity:"base"});
             return activeDir === "asc" ? cmp : -cmp;
           });
-          rows.forEach(row => tbody.appendChild(row));
+          pairs.forEach(p => { tbody.appendChild(p.main); if (p.detail) tbody.appendChild(p.detail); });
           table.querySelectorAll("button[data-sort]").forEach(b => b.classList.remove("sorted-asc","sorted-desc"));
           button.classList.add(activeDir === "asc" ? "sorted-asc" : "sorted-desc");
         });
@@ -349,6 +372,8 @@ const tableSortJS = `
 `
 
 // mcpSectionHTML is the MCP results section used inside both unified and standalone templates.
+// Details are rendered as hidden rows directly below their parent row in the table,
+// toggled by clicking the row — no need to scroll to the bottom.
 const mcpSectionHTML = `
     {{if .MCPServers}}
     <div class="table-wrap">
@@ -366,7 +391,7 @@ const mcpSectionHTML = `
         </thead>
         <tbody>
           {{range .MCPServers}}
-          <tr data-target="{{.Target}}" data-transport="{{.Transport}}" data-protocol="{{.ProtocolVersion}}" data-status="{{.Status}}" data-server="{{.ServerInfo}}" data-tools="{{.ToolCount}}" data-score="{{.FingerprintScore}}">
+          <tr class="expandable-row" data-target="{{.Target}}" data-transport="{{.Transport}}" data-protocol="{{.ProtocolVersion}}" data-status="{{.Status}}" data-server="{{.ServerInfo}}" data-tools="{{.ToolCount}}" data-score="{{.FingerprintScore}}">
             <td><code>{{.Target}}</code></td>
             <td>{{.Transport}}</td>
             <td>{{.ProtocolVersion}}</td>
@@ -375,39 +400,38 @@ const mcpSectionHTML = `
             <td>{{.ToolCount}}</td>
             <td>{{.FingerprintScore}}</td>
           </tr>
+          <tr class="detail-row" style="display:none">
+            <td colspan="7">
+              <div class="detail-body">
+                <div class="detail-grid">
+                  <div class="kv"><span>{{$.Lang.Transport}}</span>{{.Transport}}</div>
+                  <div class="kv"><span>{{$.Lang.Status}}</span>{{.Status}}</div>
+                  <div class="kv"><span>{{$.Lang.Protocol}}</span>{{.ProtocolVersion}}</div>
+                  <div class="kv"><span>{{$.Lang.Score}}</span>{{.FingerprintScore}}</div>
+                </div>
+                <h3>{{$.Lang.Evidence}}</h3>
+                <div class="evidence-grid">
+                  <div class="kv wide"><span>URL</span><code>{{.EvidenceURL}}</code></div>
+                  <div class="kv"><span>{{$.Lang.JSONRPC}}</span>{{.JSONRPCSummary}}</div>
+                  <div class="kv"><span>{{$.Lang.FingerprintSignals}}</span>{{if .FingerprintSignals}}{{.FingerprintSignals}}{{else}}-{{end}}</div>
+                  <div class="kv wide"><span>{{$.Lang.AuthReasons}}</span>{{if .AuthReasons}}<div class="reason-list">{{range .AuthReasons}}<div>{{.}}</div>{{end}}</div>{{else}}-{{end}}</div>
+                </div>
+                {{if .ResponseHeaders}}<h3>{{$.Lang.ResponseHeaders}}</h3><ul>{{range .ResponseHeaders}}<li><code>{{.}}</code></li>{{end}}</ul>{{end}}
+                {{if .AuthRequired}}<p class="muted">{{$.Lang.UnavailableAuth}}</p>{{end}}
+                {{if .HoneypotSuspected}}<p><strong>{{$.Lang.HoneypotSignals}}:</strong> {{.HoneypotSignals}}</p>{{end}}
+                {{if .HasAnyDetails}}
+                  {{if .Tools}}<h3>{{$.Lang.ToolList}}</h3><ul>{{range .Tools}}<li><strong>{{.Name}}</strong>{{if .Description}} <span class="description">{{.Description}}</span>{{end}}</li>{{end}}</ul>{{end}}
+                  {{if .Resources}}<h3>{{$.Lang.ResourceList}}</h3><ul>{{range .Resources}}<li><strong>{{.URI}}</strong>{{if .Name}} <span class="description">{{.Name}}</span>{{end}}</li>{{end}}</ul>{{end}}
+                  {{if .ResourceTemplates}}<h3>{{$.Lang.ResourceTemplateList}}</h3><ul>{{range .ResourceTemplates}}<li><strong>{{.URITemplate}}</strong>{{if .Name}} <span class="description">{{.Name}}</span>{{end}}</li>{{end}}</ul>{{end}}
+                  {{if .Prompts}}<h3>{{$.Lang.PromptList}}</h3><ul>{{range .Prompts}}<li><strong>{{.Name}}</strong>{{if .Description}} <span class="description">{{.Description}}</span>{{end}}</li>{{end}}</ul>{{end}}
+                {{else}}<p class="muted">{{$.Lang.NoExposedDetails}}</p>{{end}}
+              </div>
+            </td>
+          </tr>
           {{end}}
         </tbody>
       </table>
     </div>
-    {{range .MCPServers}}
-    <details>
-      <summary>{{$.Lang.Details}}: {{.Target}}</summary>
-      <div class="detail-body">
-        <div class="detail-grid">
-          <div class="kv"><span>{{$.Lang.Transport}}</span>{{.Transport}}</div>
-          <div class="kv"><span>{{$.Lang.Status}}</span>{{.Status}}</div>
-          <div class="kv"><span>{{$.Lang.Protocol}}</span>{{.ProtocolVersion}}</div>
-          <div class="kv"><span>{{$.Lang.Score}}</span>{{.FingerprintScore}}</div>
-        </div>
-        <h3>{{$.Lang.Evidence}}</h3>
-        <div class="evidence-grid">
-          <div class="kv wide"><span>URL</span><code>{{.EvidenceURL}}</code></div>
-          <div class="kv"><span>{{$.Lang.JSONRPC}}</span>{{.JSONRPCSummary}}</div>
-          <div class="kv"><span>{{$.Lang.FingerprintSignals}}</span>{{if .FingerprintSignals}}{{.FingerprintSignals}}{{else}}-{{end}}</div>
-          <div class="kv wide"><span>{{$.Lang.AuthReasons}}</span>{{if .AuthReasons}}<div class="reason-list">{{range .AuthReasons}}<div>{{.}}</div>{{end}}</div>{{else}}-{{end}}</div>
-        </div>
-        {{if .ResponseHeaders}}<h3>{{$.Lang.ResponseHeaders}}</h3><ul>{{range .ResponseHeaders}}<li><code>{{.}}</code></li>{{end}}</ul>{{end}}
-        {{if .AuthRequired}}<p class="muted">{{$.Lang.UnavailableAuth}}</p>{{end}}
-        {{if .HoneypotSuspected}}<p><strong>{{$.Lang.HoneypotSignals}}:</strong> {{.HoneypotSignals}}</p>{{end}}
-        {{if .HasAnyDetails}}
-          {{if .Tools}}<h3>{{$.Lang.ToolList}}</h3><ul>{{range .Tools}}<li><strong>{{.Name}}</strong>{{if .Description}} <span class="description">{{.Description}}</span>{{end}}</li>{{end}}</ul>{{end}}
-          {{if .Resources}}<h3>{{$.Lang.ResourceList}}</h3><ul>{{range .Resources}}<li><strong>{{.URI}}</strong>{{if .Name}} <span class="description">{{.Name}}</span>{{end}}</li>{{end}}</ul>{{end}}
-          {{if .ResourceTemplates}}<h3>{{$.Lang.ResourceTemplateList}}</h3><ul>{{range .ResourceTemplates}}<li><strong>{{.URITemplate}}</strong>{{if .Name}} <span class="description">{{.Name}}</span>{{end}}</li>{{end}}</ul>{{end}}
-          {{if .Prompts}}<h3>{{$.Lang.PromptList}}</h3><ul>{{range .Prompts}}<li><strong>{{.Name}}</strong>{{if .Description}} <span class="description">{{.Description}}</span>{{end}}</li>{{end}}</ul>{{end}}
-        {{else}}<p class="muted">{{$.Lang.NoExposedDetails}}</p>{{end}}
-      </div>
-    </details>
-    {{end}}
     {{else}}<div class="empty">{{.Lang.NoResults}}</div>{{end}}
 `
 
@@ -428,7 +452,7 @@ const a2aSectionHTML = `
         </thead>
         <tbody>
           {{range .A2AServers}}
-          <tr data-target="{{.Target}}" data-profile="{{.Profile}}" data-status="{{.ExposureStatus}}" data-agent="{{.AgentName}}" data-skills="{{.SkillCount}}" data-score="{{.FingerprintScore}}">
+          <tr class="expandable-row" data-target="{{.Target}}" data-profile="{{.Profile}}" data-status="{{.ExposureStatus}}" data-agent="{{.AgentName}}" data-skills="{{.SkillCount}}" data-score="{{.FingerprintScore}}">
             <td><code>{{.Target}}</code></td>
             <td>{{.Profile}}</td>
             <td><span class="{{.StatusClass}}">{{.ExposureStatus}}</span></td>
@@ -436,42 +460,41 @@ const a2aSectionHTML = `
             <td>{{.SkillCount}}</td>
             <td>{{.FingerprintScore}}</td>
           </tr>
+          <tr class="detail-row" style="display:none">
+            <td colspan="6">
+              <div class="detail-body">
+                <div class="detail-grid">
+                  <div class="kv"><span>{{$.Lang.Protocol}}</span>{{.Profile}}</div>
+                  <div class="kv"><span>{{$.Lang.Status}}</span><span class="{{.StatusClass}}">{{.ExposureStatus}}</span></div>
+                  <div class="kv"><span>{{$.Lang.Score}}</span>{{.FingerprintScore}}</div>
+                  {{if .DeclaredAuth}}<div class="kv"><span>Declared Auth</span>{{.DeclaredAuth}}</div>{{end}}
+                </div>
+                <div class="evidence-grid">
+                  <div class="kv wide"><span>Card URL</span><code>{{.CardURL}}</code></div>
+                  {{if .ExposureSignals}}<div class="kv wide"><span>Exposure Signals</span><div>{{range (splitComma .ExposureSignals)}}<span class="tag">{{.}}</span>{{end}}</div></div>{{end}}
+                  {{if .AuthReasons}}<div class="kv wide"><span>{{$.Lang.AuthReasons}}</span><div class="reason-list">{{range .AuthReasons}}<div>{{.}}</div>{{end}}</div></div>{{end}}
+                </div>
+                {{if .Interfaces}}
+                <h3>Interfaces</h3>
+                {{range .Interfaces}}
+                <div style="font-size:13px;padding:6px 0;border-bottom:1px solid var(--line)">
+                  <span class="{{a2aIfaceStatusClass .Status}}">{{.Status}}</span>
+                  &nbsp;<code>{{.URL}}</code>&nbsp;<span class="muted">{{.Binding}}</span>
+                  {{if .PrivateHostAdvertised}}<br><span class="muted">advertised: {{.AdvertisedURL}}</span>{{end}}
+                </div>
+                {{end}}
+                {{end}}
+                {{if .HasSkills}}
+                <h3>Skills</h3>
+                <ul>{{range .Skills}}<li><strong>{{if .Name}}{{.Name}}{{else}}{{.ID}}{{end}}</strong>{{if .Description}} <span class="description">{{.Description}}</span>{{end}}</li>{{end}}</ul>
+                {{end}}
+              </div>
+            </td>
+          </tr>
           {{end}}
         </tbody>
       </table>
     </div>
-    {{range .A2AServers}}
-    <details>
-      <summary>{{$.Lang.Details}}: {{.Target}}{{if .AgentName}} — {{.AgentName}}{{end}}</summary>
-      <div class="detail-body">
-        <div class="detail-grid">
-          <div class="kv"><span>{{$.Lang.Protocol}}</span>{{.Profile}}</div>
-          <div class="kv"><span>{{$.Lang.Status}}</span><span class="{{.StatusClass}}">{{.ExposureStatus}}</span></div>
-          <div class="kv"><span>{{$.Lang.Score}}</span>{{.FingerprintScore}}</div>
-          {{if .DeclaredAuth}}<div class="kv"><span>Declared Auth</span>{{.DeclaredAuth}}</div>{{end}}
-        </div>
-        <div class="evidence-grid">
-          <div class="kv wide"><span>Card URL</span><code>{{.CardURL}}</code></div>
-          {{if .ExposureSignals}}<div class="kv wide"><span>Exposure Signals</span><div>{{range (splitComma .ExposureSignals)}}<span class="tag">{{.}}</span>{{end}}</div></div>{{end}}
-          {{if .AuthReasons}}<div class="kv wide"><span>{{$.Lang.AuthReasons}}</span><div class="reason-list">{{range .AuthReasons}}<div>{{.}}</div>{{end}}</div></div>{{end}}
-        </div>
-        {{if .Interfaces}}
-        <h3>Interfaces</h3>
-        {{range .Interfaces}}
-        <div style="font-size:13px;padding:6px 0;border-bottom:1px solid var(--line)">
-          <span class="{{a2aIfaceStatusClass .Status}}">{{.Status}}</span>
-          &nbsp;<code>{{.URL}}</code>&nbsp;<span class="muted">{{.Binding}}</span>
-          {{if .PrivateHostAdvertised}}<br><span class="muted">advertised: {{.AdvertisedURL}}</span>{{end}}
-        </div>
-        {{end}}
-        {{end}}
-        {{if .HasSkills}}
-        <h3>Skills</h3>
-        <ul>{{range .Skills}}<li><strong>{{if .Name}}{{.Name}}{{else}}{{.ID}}{{end}}</strong>{{if .Description}} <span class="description">{{.Description}}</span>{{end}}</li>{{end}}</ul>
-        {{end}}
-      </div>
-    </details>
-    {{end}}
     {{else}}<div class="empty">No A2A agents found.</div>{{end}}
 `
 
