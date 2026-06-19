@@ -68,8 +68,12 @@ func (p *LLMPipeline) Run(ctx context.Context, targets []target.Target) []*model
 		return nil
 	}
 
+	httpTimeout := p.cfg.TimeoutHTTPMs
+	if p.cfg.SkipPortScan && httpTimeout > p.cfg.TimeoutConnectMs*3 {
+		httpTimeout = p.cfg.TimeoutConnectMs * 3
+	}
 	fmt.Fprintf(os.Stderr, "[2/3] http filter  %d ports\n", len(portResults))
-	candidates := FilterHTTP(ctx, portResults, p.cfg.TimeoutHTTPMs, p.cfg.Concurrency, p.cfg.Dict)
+	candidates := FilterHTTP(ctx, portResults, httpTimeout, p.cfg.Concurrency, p.cfg.Dict)
 	if len(candidates) == 0 {
 		fmt.Fprintf(os.Stderr, "      no HTTP services found\n\n")
 		return nil

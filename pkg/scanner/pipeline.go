@@ -134,8 +134,13 @@ func (p *Pipeline) scanToHTTPCandidates(ctx context.Context, targets []target.Ta
 	}
 
 	// Stage 2: HTTP 筛选
+	// When port scan is skipped, use shorter HTTP timeout — ports are confirmed open
+	httpTimeout := p.cfg.TimeoutHTTPMs
+	if p.cfg.SkipPortScan && httpTimeout > p.cfg.TimeoutConnectMs*3 {
+		httpTimeout = p.cfg.TimeoutConnectMs * 3
+	}
 	fmt.Fprintf(os.Stderr, "[2/2] http filter  %d ports\n", len(portResults))
-	candidates := FilterHTTP(ctx, portResults, p.cfg.TimeoutHTTPMs, p.cfg.Concurrency, p.cfg.Dict)
+	candidates := FilterHTTP(ctx, portResults, httpTimeout, p.cfg.Concurrency, p.cfg.Dict)
 	if len(candidates) == 0 {
 		fmt.Fprintf(os.Stderr, "      no HTTP services found\n\n")
 		return nil

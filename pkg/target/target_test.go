@@ -2,18 +2,35 @@ package target
 
 import "testing"
 
-func TestParseURLWithoutExplicitPortDoesNotForceSchemeOnAllPorts(t *testing.T) {
+func TestParseURLWithoutExplicitPortUsesSchemeDefault(t *testing.T) {
 	targets, err := Parse("http://127.0.0.1", []int{80, 443})
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if len(targets) != 2 {
-		t.Fatalf("len(targets) = %d, want 2", len(targets))
+	if len(targets) != 1 {
+		t.Fatalf("len(targets) = %d, want 1", len(targets))
 	}
-	for _, target := range targets {
-		if target.Proto != "" {
-			t.Fatalf("target %+v forced proto %q, want empty", target, target.Proto)
-		}
+	if targets[0].Port != 80 {
+		t.Fatalf("Port = %d, want 80", targets[0].Port)
+	}
+	if targets[0].Proto != "http" {
+		t.Fatalf("Proto = %q, want %q", targets[0].Proto, "http")
+	}
+}
+
+func TestParseHTTPSURLWithoutExplicitPort(t *testing.T) {
+	targets, err := Parse("https://127.0.0.1", []int{80, 443})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("len(targets) = %d, want 1", len(targets))
+	}
+	if targets[0].Port != 443 {
+		t.Fatalf("Port = %d, want 443", targets[0].Port)
+	}
+	if targets[0].Proto != "https" {
+		t.Fatalf("Proto = %q, want %q", targets[0].Proto, "https")
 	}
 }
 

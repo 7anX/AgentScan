@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -37,6 +38,14 @@ func Parse(input string, ports []int) ([]Target, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid URL %s: %w", input, err)
 		}
+		// URL without explicit port → use scheme default (http=80, https=443)
+		if explicitPort == 0 {
+			if proto == "https" {
+				explicitPort = 443
+			} else {
+				explicitPort = 80
+			}
+		}
 		// 提取 path（如 /mcp），优先于默认端点列表
 		urlPath := extractURLPath(input)
 		ips, err := resolveHost(host)
@@ -49,9 +58,7 @@ func Parse(input string, ports []int) ([]Target, error) {
 		}
 		ts := buildTargetsWithHostname(ips, ports, explicitPort, hostname)
 		for i := range ts {
-			if explicitPort > 0 {
-				ts[i].Proto = proto
-			}
+			ts[i].Proto = proto
 			if urlPath != "" && urlPath != "/" {
 				ts[i].URLPath = urlPath
 			}
@@ -70,8 +77,9 @@ func Parse(input string, ports []int) ([]Target, error) {
 		if isNumeric(parts[1]) {
 			return parseCIDR(input, ports)
 		}
-		// host/path：忽略路径，只扫主机
+		// host/path：保留路径作为 URLPath，扇出到所有端口
 		host := parts[0]
+		urlPath := "/" + parts[1]
 		ips, err := resolveHost(host)
 		if err != nil {
 			return nil, err
@@ -80,16 +88,19 @@ func Parse(input string, ports []int) ([]Target, error) {
 		if net.ParseIP(host) == nil {
 			hostname = host
 		}
-		return buildTargetsWithHostname(ips, ports, 0, hostname), nil
+		ts := buildTargetsWithHostname(ips, ports, 0, hostname)
+		for i := range ts {
+			ts[i].URLPath = urlPath
+		}
+		return ts, nil
 	}
 
 	// host:port 格式
 	if strings.Contains(input, ":") {
 		host, portStr, err := net.SplitHostPort(input)
 		if err == nil {
-			var port int
-			fmt.Sscanf(portStr, "%d", &port)
-			if port > 0 {
+			port, err2 := strconv.Atoi(portStr)
+			if err2 == nil && port > 0 && port <= 65535 {
 				ips, err := resolveHost(host)
 				if err != nil {
 					return nil, err

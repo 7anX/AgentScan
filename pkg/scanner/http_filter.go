@@ -97,39 +97,27 @@ func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int, concurre
 			}
 
 			// 若连接失败，尝试备用协议：
-			// 1. 用户显式指定了 proto 但打错了 → 试另一个
-			// 2. proto 未指定（从端口推断为 http）但 HTTP 失败 → 补试 HTTPS
-			//    覆盖场景：8000/8080/3000 等非标准端口跑了 HTTPS
-			if !connOK {
-				var altProto string
-				if p.Proto != "" {
-					// 用户指定了协议但失败，试另一个
-					if proto == "http" {
-						altProto = "https"
-					} else {
-						altProto = "http"
-					}
-				} else if proto == "http" {
-					// 推断为 http 但失败，补试 https
-					altProto = "https"
-				}
-
-				if altProto != "" {
-					altBaseURL := fmt.Sprintf("%s://%s:%d", altProto, hostForURL(host), p.Port)
-					altReq, err2 := http.NewRequestWithContext(ctx, "GET", altBaseURL+"/", nil)
-					if err2 == nil {
-						altReq.Header.Set("User-Agent", config.UserAgent)
-						if resp, err3 := filterClient.Do(altReq); err3 == nil {
-							baseURL = altBaseURL
-							server = strings.ToLower(resp.Header.Get("Server"))
-							ct = strings.ToLower(resp.Header.Get("Content-Type"))
-							resp.Body.Close()
-							priority = httpCandidatePriority(server, ct, dict.MCPServerHints)
-						}
+			// 仅当用户未显式指定协议（Proto 为空，从端口推断）时才补试
+			// 覆盖场景：8000/8080/3000 等非标准端口跑了 HTTPS
+			if !connOK && p.Proto == "" && proto == "http" {
+				altBaseURL := fmt.Sprintf("https://%s:%d", hostForURL(host), p.Port)
+				altReq, err2 := http.NewRequestWithContext(ctx, "GET", altBaseURL+"/", nil)
+				if err2 == nil {
+					altReq.Header.Set("User-Agent", config.UserAgent)
+					if resp, err3 := filterClient.Do(altReq); err3 == nil {
+						connOK = true
+						baseURL = altBaseURL
+						server = strings.ToLower(resp.Header.Get("Server"))
+						ct = strings.ToLower(resp.Header.Get("Content-Type"))
+						resp.Body.Close()
+						priority = httpCandidatePriority(server, ct, dict.MCPServerHints)
 					}
 				}
 			}
-			// GET / 失败（404/重定向/证书错误）→ priority=0，仍然纳入候选
+			// Only add candidate if at least one protocol connected successfully
+			if !connOK {
+				return
+			}
 
 			mu.Lock()
 			candidates = append(candidates, HTTPCandidate{

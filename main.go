@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"os/signal"
 	"strconv"
@@ -30,6 +32,9 @@ func loadDict(dictDir string) *config.DictSet {
 }
 
 func main() {
+	// Suppress Go net/http internal warnings (e.g. "Unsolicited response on idle channel" from proxies)
+	log.SetOutput(io.Discard)
+
 	app := newApp()
 
 	if err := app.Run(normalizeArgs(os.Args, app.Commands)); err != nil {
@@ -354,6 +359,7 @@ func runLLMAction(c *cli.Context) error {
 	cfg.SkipPortScan = c.Bool("skip-port-scan")
 	cfg.Proxy = c.String("proxy")
 	cfg.DelayMs = c.Int("delay")
+	sanitizeConfig(&cfg)
 
 	noColor := c.Bool("no-color") || output.NoColorEnabled()
 	format := c.String("format")
@@ -458,6 +464,7 @@ func runAction(c *cli.Context) error {
 	cfg.SkipPortScan = c.Bool("skip-port-scan")
 	cfg.Proxy = c.String("proxy")
 	cfg.DelayMs = c.Int("delay")
+	sanitizeConfig(&cfg)
 
 	noColor := c.Bool("no-color") || output.NoColorEnabled()
 	format := c.String("format")
@@ -500,6 +507,7 @@ func runA2AAction(c *cli.Context) error {
 	cfg.SkipPortScan = c.Bool("skip-port-scan")
 	cfg.Proxy = c.String("proxy")
 	cfg.DelayMs = c.Int("delay")
+	sanitizeConfig(&cfg)
 
 	noColor := c.Bool("no-color") || output.NoColorEnabled()
 	format := c.String("format")
@@ -523,9 +531,13 @@ func runA2AAction(c *cli.Context) error {
 
 func parsePorts(s string) []int {
 	parts := strings.Split(s, ",")
+	seen := make(map[int]struct{}, len(parts))
 	var ports []int
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
 		n, err := strconv.Atoi(p)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[WARN] invalid port %q: %v\n", p, err)
@@ -535,9 +547,26 @@ func parsePorts(s string) []int {
 			fmt.Fprintf(os.Stderr, "[WARN] port %d out of range (1-65535), skipped\n", n)
 			continue
 		}
+		if _, dup := seen[n]; dup {
+			continue
+		}
+		seen[n] = struct{}{}
 		ports = append(ports, n)
 	}
 	return ports
+}
+
+// sanitizeConfig clamps invalid config values to safe defaults.
+func sanitizeConfig(cfg *models.ScanConfig) {
+	if cfg.Concurrency < 1 {
+		cfg.Concurrency = 1
+	}
+	if cfg.TimeoutConnectMs < 100 {
+		cfg.TimeoutConnectMs = 100
+	}
+	if cfg.MCPConcurrency < 1 {
+		cfg.MCPConcurrency = 1
+	}
 }
 
 func allProtocolPorts(ds *config.DictSet) []int {
