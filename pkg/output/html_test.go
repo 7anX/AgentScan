@@ -53,7 +53,7 @@ func TestWriteHTMLReportsCreatesChineseAndEnglishReports(t *testing.T) {
 		},
 	}
 
-	dir, err := WriteHTMLReports(results, t.TempDir())
+	dir, err := WriteHTMLReports(results, t.TempDir(), []string{"127.0.0.1"}, "")
 	if err != nil {
 		t.Fatalf("WriteHTMLReports() error = %v", err)
 	}
