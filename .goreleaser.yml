@@ -34,8 +34,9 @@ archives:
   - id: default
     name_template: >-
       {{ .ProjectName }}_v{{ .Version }}_{{ .Os }}_{{ .Arch }}
-    format: >-
-      {{ if eq .Os "windows" }}zip{{ else }}tar.gz{{ end }}
+    formats:
+      - >-
+        {{ if eq .Os "windows" }}zip{{ else }}tar.gz{{ end }}
     files:
       - LICENSE*
       - README*
