@@ -1,0 +1,60 @@
+info:
+  name: litellm
+  author: agentscan
+  severity: critical
+  desc: LiteLLM proxy — multi-provider LLM gateway
+  metadata:
+    product: litellm
+    vendor: litellm
+  priority: 25
+
+http:
+  - method: GET
+    path: '/'
+    matchers:
+      - 'body="LiteLLM API" || body="Proxy Server to call 100+ LLMs" || body="LiteLLM Admin Panel"'
+  - method: GET
+    path: '/health'
+    matchers:
+      - body="\"litellm_metadata\""
+  - method: GET
+    path: '/health/readiness'
+    matchers:
+      - body="\"litellm_version\""
+
+stage2: []
+
+version:
+  - method: GET
+    path: '/health/readiness'
+    extractor:
+      part: body
+      group: 1
+      regex: '"litellm_version":"([^"]+)"'
+  - method: GET
+    path: '/openapi.json'
+    extractor:
+      part: body
+      group: 1
+      regex: '"version":"([0-9]+\.[0-9]+\.[0-9]+)"'
+
+models:
+  - method: GET
+    path: '/v1/models'
+    extractor:
+      part: body
+      type: json_array
+      json_path: 'data[*].id'
+
+auth:
+  endpoint: '/v1/models'
+  open_status: [200]
+  auth_status: [401, 403]
+  auth_keywords: ["API key required", "Authentication Error"]
+
+risk:
+  open_with_models: critical
+  open_no_models: high
+  auth_required: medium
+
+negatives: []

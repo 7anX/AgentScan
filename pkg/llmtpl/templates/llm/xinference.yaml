@@ -1,0 +1,49 @@
+info:
+  name: xinference
+  author: agentscan
+  severity: high
+  desc: Xorbits Inference platform
+  metadata:
+    product: xinference
+    vendor: xorbitsai
+  priority: 20
+
+http:
+  - method: GET
+    path: '/v1/cluster/info'
+    matchers:
+      - body="\"xinference_version\""
+  - method: GET
+    path: '/ui/'
+    matchers:
+      - body="<title>Xinference</title>"
+
+stage2: []
+
+version:
+  - method: GET
+    path: '/v1/cluster/info'
+    extractor:
+      part: body
+      group: 1
+      regex: '"xinference_version":"([^"]+)"'
+
+models:
+  - method: GET
+    path: '/v1/models'
+    extractor:
+      part: body
+      type: json_array
+      json_path: 'data[*].id'
+
+auth:
+  endpoint: '/v1/models'
+  open_status: [200]
+  auth_status: [401, 403]
+
+risk:
+  open_with_models: critical
+  open_no_models: high
+  auth_required: medium
+
+negatives: []

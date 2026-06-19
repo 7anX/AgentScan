@@ -1,0 +1,53 @@
+info:
+  name: ollama
+  author: agentscan
+  severity: critical
+  desc: Ollama local LLM inference server
+  metadata:
+    product: ollama
+    vendor: ollama
+  priority: 1
+
+http:
+  - method: GET
+    path: '/'
+    matchers:
+      - body="Ollama is running"
+  - method: GET
+    path: '/api/tags'
+    matchers:
+      - body="\"models\"" && body="\"name\""
+
+stage2:
+  - method: GET
+    path: '/api/version'
+    matchers:
+      - body="\"version\""
+
+version:
+  - method: GET
+    path: '/api/version'
+    extractor:
+      part: body
+      group: 1
+      regex: '"version":"([^"]+)"'
+
+models:
+  - method: GET
+    path: '/api/tags'
+    extractor:
+      part: body
+      type: json_array
+      json_path: 'models[*].name'
+
+auth:
+  endpoint: '/api/tags'
+  open_status: [200]
+  auth_status: [401, 403]
+
+risk:
+  open_with_models: critical
+  open_no_models: high
+  auth_required: medium
+
+negatives: []

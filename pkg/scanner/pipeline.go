@@ -503,6 +503,40 @@ func RunScan(ctx context.Context, rawTargets []string, filePath string,
 		}
 	}
 
+	// LLM probe — reuse the same HTTP candidates
+	var llmResults []*models.LLMServer
+	if len(candidates) > 0 {
+		fmt.Fprintf(os.Stderr, "\n--- LLM scan ---\n")
+		llmCfg := cfg
+		// LLM probes are lightweight GETs; cap timeout at 5x connect timeout
+		if llmCfg.TimeoutMCPMs > llmCfg.TimeoutConnectMs*5 {
+			llmCfg.TimeoutMCPMs = llmCfg.TimeoutConnectMs * 5
+		}
+		var llmOnFound func(*models.LLMServer)
+		if format == "terminal" || format == "" {
+			llmOnFound = func(s *models.LLMServer) {
+				output.PrintLLMServer(s, noColor)
+			}
+		}
+		llmPipeline, llmErr := NewLLMPipeline(llmCfg, noColor, llmOnFound, "")
+		if llmErr != nil {
+			fmt.Fprintf(os.Stderr, "[WARN] LLM scan skipped: %v\n", llmErr)
+		} else {
+			llmResults = llmPipeline.RunFromCandidates(ctx, candidates)
+			if format == "terminal" || format == "" {
+				output.PrintLLMSummary(llmResults, noColor)
+			}
+			if outputPath != "" {
+				llmOutputPath := strings.TrimSuffix(outputPath, filepath.Ext(outputPath)) + "_llm.json"
+				if err := output.WriteLLMJSON(llmResults, llmOutputPath); err != nil {
+					fmt.Fprintf(os.Stderr, "[WARN] write LLM JSON: %v\n", err)
+				} else {
+					fmt.Fprintf(os.Stderr, "[*] LLM results written to: %s\n", llmOutputPath)
+				}
+			}
+		}
+	}
+
 	// Single unified report containing both MCP and A2A results
 	fmt.Fprintf(os.Stderr, "report     generating unified html/txt files...\n")
 	reportDir, err := output.WriteUnifiedHTMLReports(results, a2aResults, htmlReportBaseDir(outputPath), rawTargets, filePath)

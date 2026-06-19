@@ -1,0 +1,44 @@
+info:
+  name: fastchat
+  author: agentscan
+  severity: high
+  desc: LMSYS FastChat controller/worker
+  metadata:
+    product: fastchat
+    vendor: lm-sys
+  priority: 30
+
+http:
+  - method: POST
+    path: '/worker_get_status'
+    matchers:
+      - body="model_names"
+  - method: GET
+    path: '/v1/models'
+    matchers:
+      - 'body="\"owned_by\":\"fastchat\"" || body="\"owned_by\": \"fastchat\""'
+
+stage2: []
+version: []
+
+models:
+  - method: GET
+    path: '/v1/models'
+    extractor:
+      part: body
+      type: json_array
+      json_path: 'data[*].id'
+
+auth:
+  endpoint: '/v1/models'
+  open_status: [200]
+  auth_status: [401, 403]
+
+risk:
+  open_with_models: high
+  open_no_models: high
+  auth_required: medium
+
+negatives:
+  - body="\"owned_by\":\"vllm\""
+  - body="\"owned_by\":\"sglang\""

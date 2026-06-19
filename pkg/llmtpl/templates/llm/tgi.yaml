@@ -1,0 +1,47 @@
+info:
+  name: huggingface-tgi
+  author: agentscan
+  severity: high
+  desc: HuggingFace Text Generation Inference
+  metadata:
+    product: text-generation-inference
+    vendor: huggingface
+  priority: 15
+
+http:
+  - method: GET
+    path: '/info'
+    matchers:
+      - body="\"model_id\"" && body="\"model_dtype\"" && body="\"max_batch_total_tokens\""
+      - body="\"model_id\":" && body="\"model_pipeline_tag\":"
+
+stage2: []
+
+version:
+  - method: GET
+    path: '/info'
+    extractor:
+      part: body
+      group: 1
+      regex: '"version":"([^"]+)"'
+
+models:
+  - method: GET
+    path: '/info'
+    extractor:
+      part: body
+      type: regex
+      regex: '"model_id":"([^"]+)"'
+      group: 1
+
+auth:
+  endpoint: '/info'
+  open_status: [200]
+  auth_status: [401, 403]
+
+risk:
+  open_with_models: high
+  open_no_models: high
+  auth_required: medium
+
+negatives: []

@@ -1,0 +1,59 @@
+info:
+  name: llama-cpp
+  author: agentscan
+  severity: high
+  desc: llama.cpp HTTP server
+  metadata:
+    product: llama-cpp
+    vendor: ggerganov
+  priority: 5
+
+http:
+  - method: GET
+    path: '/v1/models'
+    matchers:
+      - body="\"owned_by\":\"llamacpp\""
+  - method: GET
+    path: '/health'
+    matchers:
+      - header="llama.cpp"
+  - method: GET
+    path: '/props'
+    matchers:
+      - body="\"total_slots\"" && body="\"default_generation_settings\""
+
+stage2:
+  - method: GET
+    path: '/slots'
+    matchers:
+      - body="\"n_ctx\""
+
+version: []
+
+models:
+  - method: GET
+    path: '/v1/models'
+    extractor:
+      part: body
+      type: json_array
+      json_path: 'data[*].id'
+  - method: GET
+    path: '/props'
+    extractor:
+      part: body
+      type: regex
+      regex: '"model":"([^"]+)"'
+      group: 1
+
+auth:
+  endpoint: '/health'
+  open_status: [200]
+  auth_status: [401, 403]
+
+risk:
+  open_with_models: high
+  open_no_models: high
+  auth_required: medium
+
+negatives:
+  - body="Ollama is running"

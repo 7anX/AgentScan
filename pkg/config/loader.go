@@ -26,6 +26,9 @@ type DictSet struct {
 	// ── A2A ──
 	A2APorts     []int
 	A2ACardPaths []string
+
+	// ── LLM ──
+	LLMPorts []int
 }
 
 // DefaultDictSet 返回代码内置的默认字典（deep copy，防止调用方误改全局值）。
@@ -39,6 +42,7 @@ func DefaultDictSet() *DictSet {
 		HTTPSPorts:     copyIntSet(HTTPSPorts),
 		A2APorts:       copyInts(A2ADefaultPorts),
 		A2ACardPaths:   copyStrings(A2ACardPaths),
+		LLMPorts:       copyInts(LLMDefaultPorts),
 	}
 }
 
@@ -130,6 +134,15 @@ func LoadDictSet(dir string) (*DictSet, error) {
 		}
 	} else if len(paths) > 0 {
 		ds.A2ACardPaths = normalizeAndDedupePaths(paths)
+	}
+
+	// LLM 端口
+	if ports, err := loadInts(filepath.Join(dir, "llm_ports.txt")); err != nil {
+		if !isNotFound(err) {
+			errs = append(errs, err.Error())
+		}
+	} else if len(ports) > 0 {
+		ds.LLMPorts = dedupeInts(ports)
 	}
 
 	if len(errs) > 0 {

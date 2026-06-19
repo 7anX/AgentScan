@@ -1,0 +1,39 @@
+info:
+  name: nvidia-nim
+  author: agentscan
+  severity: high
+  desc: NVIDIA NIM — GPU-accelerated inference microservice
+  metadata:
+    product: nvidia-nim
+    vendor: nvidia
+  priority: 13
+
+http:
+  - method: GET
+    path: '/v1/metadata'
+    matchers:
+      - body="\"modelInfo\"" && body="\"assetInfo\""
+
+stage2: []
+
+version: []
+
+models:
+  - method: GET
+    path: '/v1/models'
+    extractor:
+      part: body
+      type: json_array
+      json_path: 'data[*].id'
+
+auth:
+  endpoint: '/v1/models'
+  open_status: [200]
+  auth_status: [401, 403]
+
+risk:
+  open_with_models: critical
+  open_no_models: high
+  auth_required: medium
+
+negatives: []

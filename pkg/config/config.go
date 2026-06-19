@@ -222,3 +222,43 @@ var A2ACardPaths = []string{
 	"/.well-known/agent.json",      // A2A legacy（早期实现）
 	"/agent.json",                  // 根路径变体（极简部署）
 }
+
+// ── LLM 默认端口 ────────────────────────────────────────────────────────────
+// LLM Inference API 默认扫描端口列表。
+//
+// P0 — 框架默认端口（最高命中率）：
+//
+//	11434: Ollama 默认
+//	8000:  vLLM / SGLang / FastChat 默认
+//	8080:  LocalAI / 通用 HTTP
+//	3000:  LiteLLM 默认
+//	1234:  LM Studio 默认
+//	4000:  LiteLLM proxy 备选
+//
+// P1 — 次要框架端口：
+//
+//	9997:  Xinference 默认
+//	30000: SGLang 备选
+//	5001:  LocalAI 备选
+//	4891:  LiteLLM 备选
+//	23333: LMDeploy 默认
+//	21001: FastChat controller
+//	21002: FastChat model worker
+//	7860:  Gradio-based UIs（Xinference web）
+//
+// P2 — 多实例/其他：
+//
+//	8001, 8002: vLLM 多实例
+//	5000:  通用 Python
+//	7080:  LMDeploy 备选
+//	20128: AI gateway
+//	11435-11440: Ollama 集群范围
+var LLMDefaultPorts = []int{
+	// P0
+	11434, 8000, 8080, 3000, 1234, 4000,
+	// P1
+	9997, 30000, 5001, 4891, 23333, 21001, 21002, 7860,
+	// P2
+	8001, 8002, 5000, 7080, 20128,
+	11435, 11436, 11437, 11438, 11439, 11440,
+}

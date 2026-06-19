@@ -1,0 +1,53 @@
+info:
+  name: localai
+  author: agentscan
+  severity: high
+  desc: LocalAI — local OpenAI-compatible API
+  metadata:
+    product: localai
+    vendor: localai
+  priority: 35
+
+http:
+  - method: GET
+    path: '/metrics'
+    matchers:
+      - body="localai_"
+  - method: GET
+    path: '/system'
+    matchers:
+      - body="\"LocalAI\""
+
+stage2:
+  - method: GET
+    path: '/readyz'
+    matchers:
+      - status="200"
+
+version:
+  - method: GET
+    path: '/system'
+    extractor:
+      part: body
+      group: 1
+      regex: '"version":"([^"]+)"'
+
+models:
+  - method: GET
+    path: '/v1/models'
+    extractor:
+      part: body
+      type: json_array
+      json_path: 'data[*].id'
+
+auth:
+  endpoint: '/v1/models'
+  open_status: [200]
+  auth_status: [401, 403]
+
+risk:
+  open_with_models: high
+  open_no_models: high
+  auth_required: medium
+
+negatives: []

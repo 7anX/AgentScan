@@ -47,6 +47,7 @@ func newApp() *cli.App {
 		Commands: []*cli.Command{
 			mcpCommand(),
 			a2aCommand(),
+			llmCommand(),
 			scanCommand(),
 		},
 	}
@@ -293,6 +294,111 @@ func a2aCommandWithAction(action cli.ActionFunc) *cli.Command {
 	}
 }
 
+// ── LLM command ─────────────────────────────────────────────────────────────
+
+func llmCommand() *cli.Command {
+	return llmCommandWithAction(runLLMAction)
+}
+
+func llmCommandWithAction(action cli.ActionFunc) *cli.Command {
+	flags := append(commonFlags(),
+		&cli.BoolFlag{
+			Name:               "verbose-raw",
+			Usage:              "Include raw LLM API response in JSON",
+			DisableDefaultText: true,
+			Category:           "Debug",
+		},
+		&cli.IntFlag{
+			Name:        "llm-threads",
+			Value:       50,
+			Usage:       "LLM probe concurrency",
+			DefaultText: "50",
+			Category:    "Scan",
+		},
+		&cli.StringFlag{
+			Name:        "template-dir",
+			Usage:       "Custom YAML template directory (overrides built-in templates)",
+			DefaultText: "",
+			Category:    "Scan",
+		},
+	)
+	return &cli.Command{
+		Name:                   "llm",
+		Usage:                  "Scan LLM Inference APIs (Ollama, vLLM, SGLang, TGI, ...)",
+		UsageText:              "agentscan llm [options] [target...]",
+		UseShortOptionHandling: true,
+		Flags:                  flags,
+		Action:                 action,
+		CustomHelpTemplate:     llmHelpTemplate,
+	}
+}
+
+func runLLMAction(c *cli.Context) error {
+	rawTargets := append(c.StringSlice("target"), c.Args().Slice()...)
+
+	ds := loadDict(c.String("dict-dir"))
+
+	cfg := models.DefaultConfig()
+	cfg.Dict = ds
+	cfg.Ports = ds.LLMPorts
+	if c.IsSet("ports") {
+		cfg.Ports = parsePorts(c.String("ports"))
+	}
+	cfg.Concurrency = c.Int("threads")
+	cfg.TimeoutConnectMs = c.Int("timeout")
+	cfg.TimeoutHTTPMs = cfg.TimeoutConnectMs * 5
+	cfg.TimeoutMCPMs = cfg.TimeoutConnectMs * 10
+	cfg.VerboseRaw = c.Bool("verbose-raw")
+	cfg.Verbose = c.Bool("verbose")
+	cfg.MCPConcurrency = c.Int("llm-threads")
+	cfg.SkipPortScan = c.Bool("skip-port-scan")
+	cfg.Proxy = c.String("proxy")
+	cfg.DelayMs = c.Int("delay")
+
+	noColor := c.Bool("no-color") || output.NoColorEnabled()
+	format := c.String("format")
+	outputPath := c.String("output")
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	_, err := scanner.RunLLMScan(
+		ctx,
+		rawTargets,
+		c.String("file"),
+		cfg,
+		outputPath,
+		format,
+		noColor,
+		c.String("template-dir"),
+	)
+	return err
+}
+
+var llmHelpTemplate = `NAME:
+   {{.HelpName}} - {{.Usage}}
+
+USAGE:
+   {{.HelpName}} [options] [target...]
+
+   Scan targets for exposed LLM inference APIs.
+   Detects: Ollama, vLLM, SGLang, TGI, llama.cpp, Xinference,
+            LiteLLM, FastChat, LocalAI, LM Studio, LMDeploy.
+
+   Uses read-only GET probes — no inference triggered, no models pulled.
+
+EXAMPLES:
+   {{.HelpName}} 192.168.1.0/24
+   {{.HelpName}} -t 10.0.0.1:11434 --skip-port-scan
+   {{.HelpName}} -f targets.txt -o results.json
+   {{.HelpName}} example.com --template-dir ./my-templates/
+
+OPTIONS:
+   {{range .VisibleFlagCategories}}{{if .Name}}
+   {{.Name}}:{{end}}{{range .Flags}}
+   {{.}}{{end}}{{end}}
+`
+
 func scanCommand() *cli.Command {
 	return scanCommandWithAction(runAction)
 }
@@ -337,7 +443,7 @@ func runAction(c *cli.Context) error {
 
 	cfg := models.DefaultConfig()
 	cfg.Dict = ds
-	cfg.Ports = ds.MCPPorts // default: dict (custom or built-in MCP ports)
+	cfg.Ports = allProtocolPorts(ds) // default: union of MCP/A2A/LLM dict ports
 	if c.IsSet("ports") {
 		cfg.Ports = parsePorts(c.String("ports"))
 	}
@@ -431,6 +537,27 @@ func parsePorts(s string) []int {
 		}
 		ports = append(ports, n)
 	}
+	return ports
+}
+
+func allProtocolPorts(ds *config.DictSet) []int {
+	if ds == nil {
+		ds = config.DefaultDictSet()
+	}
+	seen := make(map[int]struct{}, len(ds.MCPPorts)+len(ds.A2APorts)+len(ds.LLMPorts))
+	ports := make([]int, 0, len(ds.MCPPorts)+len(ds.A2APorts)+len(ds.LLMPorts))
+	add := func(values []int) {
+		for _, port := range values {
+			if _, ok := seen[port]; ok {
+				continue
+			}
+			seen[port] = struct{}{}
+			ports = append(ports, port)
+		}
+	}
+	add(ds.MCPPorts)
+	add(ds.A2APorts)
+	add(ds.LLMPorts)
 	return ports
 }
 

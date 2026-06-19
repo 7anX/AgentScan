@@ -1,0 +1,57 @@
+info:
+  name: vllm
+  author: agentscan
+  severity: high
+  desc: vLLM high-throughput inference engine
+  metadata:
+    product: vllm
+    vendor: vllm-project
+  priority: 10
+
+http:
+  - method: GET
+    path: '/version'
+    matchers:
+      - body="{\"version\":\""
+  - method: GET
+    path: '/v1/models'
+    matchers:
+      - header="uvicorn" && body="\"object\"" && body="\"data\""
+      - 'body="\"owned_by\":\"vllm\"" || body="\"owned_by\": \"vllm\""'
+
+stage2:
+  - method: GET
+    path: '/health'
+    matchers:
+      - status="200"
+
+version:
+  - method: GET
+    path: '/version'
+    extractor:
+      part: body
+      group: 1
+      regex: '"version":"([^"]+)"'
+
+models:
+  - method: GET
+    path: '/v1/models'
+    extractor:
+      part: body
+      type: json_array
+      json_path: 'data[*].id'
+
+auth:
+  endpoint: '/v1/models'
+  open_status: [200]
+  auth_status: [401, 403]
+  auth_keywords: ["api key", "unauthorized"]
+
+risk:
+  open_with_models: critical
+  open_no_models: high
+  auth_required: medium
+
+negatives:
+  - 'body="\"owned_by\":\"sglang\"" || body="\"owned_by\": \"sglang\""'
+  - body="Ollama is running"

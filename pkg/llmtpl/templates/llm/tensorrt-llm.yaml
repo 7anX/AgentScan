@@ -1,0 +1,52 @@
+info:
+  name: tensorrt-llm
+  author: agentscan
+  severity: high
+  desc: NVIDIA TensorRT-LLM inference server
+  metadata:
+    product: tensorrt-llm
+    vendor: nvidia
+  priority: 12
+
+http:
+  - method: GET
+    path: '/v1/models'
+    matchers:
+      - 'body="\"owned_by\":\"tensorrt_llm\"" || body="\"owned_by\": \"tensorrt_llm\""'
+  - method: GET
+    path: '/metrics'
+    matchers:
+      - body="inflightBatchingStats" && body="kvCacheStats"
+
+stage2:
+  - method: GET
+    path: '/health_generate'
+    matchers:
+      - body="Generation health check OK"
+
+version: []
+
+models:
+  - method: GET
+    path: '/v1/models'
+    extractor:
+      part: body
+      type: json_array
+      json_path: 'data[*].id'
+
+auth:
+  endpoint: '/v1/models'
+  open_status: [200]
+  auth_status: [401, 403]
+
+risk:
+  open_with_models: critical
+  open_no_models: high
+  auth_required: medium
+
+negatives:
+  - 'body="\"owned_by\":\"vllm\"" || body="\"owned_by\": \"vllm\""'
+  - 'body="\"owned_by\":\"sglang\"" || body="\"owned_by\": \"sglang\""'
+  - body="\"owned_by\":\"llamacpp\""
+  - 'body="\"owned_by\":\"fastchat\"" || body="\"owned_by\": \"fastchat\""'
+  - body="\"owned_by\":\"local-ai\""
