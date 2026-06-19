@@ -35,8 +35,11 @@ archives:
     name_template: >-
       {{ .ProjectName }}_v{{ .Version }}_{{ .Os }}_{{ .Arch }}
     formats:
-      - >-
-        {{ if eq .Os "windows" }}zip{{ else }}tar.gz{{ end }}
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
     files:
       - LICENSE*
       - README*
