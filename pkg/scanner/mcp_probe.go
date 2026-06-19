@@ -616,11 +616,6 @@ func sseProbeResult(postPath string, elapsed, score float64, serverName, serverV
 //   - 0.35 正常门槛
 //   - 例外1：protocolVersion + serverInfo.name 同时存在 → 两个规范 REQUIRED 字段，强制 0.35
 //   - 例外2：响应是 JSON-RPC 错误格式（有 "error" 无 "result"）→ 服务存在的证据，给 0.2 基础分
-func scoreFingerprint(data map[string]interface{}) (float64, string, string, string, map[string]interface{}) {
-	score, serverName, serverVer, protocolVer, caps, _ := scoreFingerprintDetailed(data)
-	return score, serverName, serverVer, protocolVer, caps
-}
-
 func scoreFingerprintDetailed(data map[string]interface{}) (float64, string, string, string, map[string]interface{}, models.FingerprintEvidence) {
 	evidence := models.FingerprintEvidence{}
 	result, ok := data["result"].(map[string]interface{})

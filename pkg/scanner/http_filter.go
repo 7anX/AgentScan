@@ -99,8 +99,6 @@ func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int) []HTTPCa
 					if priority == 0 && (strings.Contains(ct, "text/event-stream") || strings.Contains(ct, "application/json")) {
 						priority = 1
 					}
-				} else {
-					// GET / 失败（TLS 错误 / 超时）→ connOK=false，触发 proto 降级逻辑
 				}
 			}
 
@@ -128,7 +126,6 @@ func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int) []HTTPCa
 					if err2 == nil {
 						altReq.Header.Set("User-Agent", "Mozilla/5.0 (compatible; agentscan/1.0)")
 						if resp, err3 := filterClient.Do(altReq); err3 == nil {
-							connOK = true
 							baseURL = altBaseURL
 							server = strings.ToLower(resp.Header.Get("Server"))
 							ct = strings.ToLower(resp.Header.Get("Content-Type"))

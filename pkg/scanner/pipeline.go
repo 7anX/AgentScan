@@ -29,10 +29,6 @@ func NewPipeline(cfg models.ScanConfig, noColor bool, onFound func(*models.MCPSe
 	return &Pipeline{cfg: cfg, noColor: noColor, onFound: onFound}
 }
 
-func clearProgressLine() {
-	fmt.Fprintf(os.Stderr, "\r%s\r", strings.Repeat(" ", 120))
-}
-
 func progressPercent(done, total int64) int {
 	if total <= 0 {
 		return 100
