@@ -55,7 +55,9 @@ func ScanPorts(ctx context.Context, targets []target.Target, concurrency int, ti
 				mu.Lock()
 				results = append(results, PortResult{IP: t.IP, Port: t.Port, Hostname: t.Hostname, URLPath: t.URLPath, Proto: t.Proto, Open: true})
 				mu.Unlock()
-				fmt.Fprintf(os.Stderr, "      open  %s:%d\n", host, t.Port)
+				if verbose {
+					fmt.Fprintf(os.Stderr, "      open  %s:%d\n", host, t.Port)
+				}
 			}
 		}(t)
 	}

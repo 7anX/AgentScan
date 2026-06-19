@@ -45,35 +45,47 @@ type reportLanguage struct {
 	NoResults            string
 	UnavailableAuth      string
 	HoneypotSignals      string
+	NoExposedDetails     string
 	ToolList             string
 	ResourceList         string
 	ResourceTemplateList string
 	PromptList           string
+	Evidence             string
+	ResponseHeaders      string
+	JSONRPC              string
+	FingerprintSignals   string
+	AuthReasons          string
 	None                 string
 }
 
 type htmlServer struct {
-	Target            string
-	URL               string
-	Endpoint          string
-	Transport         string
-	ProtocolVersion   string
-	Status            string
-	StatusClass       string
-	ServerInfo        string
-	FingerprintScore  string
-	ToolCount         int
-	ResourceCount     int
-	TemplateCount     int
-	PromptCount       int
-	HoneypotSuspected bool
-	HoneypotScore     int
-	HoneypotSignals   string
-	AuthRequired      bool
-	Tools             []models.MCPTool
-	Resources         []models.MCPResource
-	ResourceTemplates []models.MCPResourceTemplate
-	Prompts           []models.MCPPrompt
+	Target             string
+	URL                string
+	Endpoint           string
+	Transport          string
+	ProtocolVersion    string
+	Status             string
+	StatusClass        string
+	ServerInfo         string
+	FingerprintScore   string
+	ToolCount          int
+	ResourceCount      int
+	TemplateCount      int
+	PromptCount        int
+	HoneypotSuspected  bool
+	HoneypotScore      int
+	HoneypotSignals    string
+	AuthRequired       bool
+	Tools              []models.MCPTool
+	Resources          []models.MCPResource
+	ResourceTemplates  []models.MCPResourceTemplate
+	Prompts            []models.MCPPrompt
+	EvidenceURL        string
+	ResponseHeaders    []string
+	JSONRPCSummary     string
+	FingerprintSignals string
+	AuthReasons        []string
+	HasAnyDetails      bool
 }
 
 func WriteHTMLReports(results []*models.MCPServer, baseDir string) (string, error) {
@@ -181,27 +193,33 @@ func buildHTMLServers(results []*models.MCPServer) []htmlServer {
 		}
 
 		servers = append(servers, htmlServer{
-			Target:            fmt.Sprintf("%s:%d%s", r.IP, r.Port, r.Endpoint),
-			URL:               r.URL,
-			Endpoint:          r.Endpoint,
-			Transport:         htmlTransportLabel(r.Transport),
-			ProtocolVersion:   protocol,
-			Status:            status,
-			StatusClass:       statusClass,
-			ServerInfo:        htmlServerLabel(r),
-			FingerprintScore:  fmt.Sprintf("%.2f", r.FingerprintScore),
-			ToolCount:         r.ToolCount,
-			ResourceCount:     r.ResourceCount,
-			TemplateCount:     r.ResourceTemplateCount,
-			PromptCount:       r.PromptCount,
-			HoneypotSuspected: r.Honeypot.Suspected,
-			HoneypotScore:     r.Honeypot.Score,
-			HoneypotSignals:   strings.Join(r.Honeypot.Signals, ", "),
-			AuthRequired:      r.AuthRequired,
-			Tools:             sortedTools(r.Tools),
-			Resources:         sortedResources(r.Resources),
-			ResourceTemplates: sortedResourceTemplates(r.ResourceTemplates),
-			Prompts:           sortedPrompts(r.Prompts),
+			Target:             fmt.Sprintf("%s:%d%s", r.IP, r.Port, r.Endpoint),
+			URL:                r.URL,
+			Endpoint:           r.Endpoint,
+			Transport:          htmlTransportLabel(r.Transport),
+			ProtocolVersion:    protocol,
+			Status:             status,
+			StatusClass:        statusClass,
+			ServerInfo:         htmlServerLabel(r),
+			FingerprintScore:   fmt.Sprintf("%.2f", r.FingerprintScore),
+			ToolCount:          r.ToolCount,
+			ResourceCount:      r.ResourceCount,
+			TemplateCount:      r.ResourceTemplateCount,
+			PromptCount:        r.PromptCount,
+			HoneypotSuspected:  r.Honeypot.Suspected,
+			HoneypotScore:      r.Honeypot.Score,
+			HoneypotSignals:    strings.Join(r.Honeypot.Signals, ", "),
+			AuthRequired:       r.AuthRequired,
+			Tools:              sortedTools(r.Tools),
+			Resources:          sortedResources(r.Resources),
+			ResourceTemplates:  sortedResourceTemplates(r.ResourceTemplates),
+			Prompts:            sortedPrompts(r.Prompts),
+			EvidenceURL:        firstNonEmpty(r.Evidence.URL, reportURL(r)),
+			ResponseHeaders:    formatHeaders(r.Evidence.ResponseHeaders),
+			JSONRPCSummary:     formatJSONRPCSummary(r.Evidence.JSONRPC),
+			FingerprintSignals: strings.Join(r.Evidence.Fingerprint.Signals, ", "),
+			AuthReasons:        r.Evidence.Auth.Reasons,
+			HasAnyDetails:      len(r.Tools) > 0 || len(r.Resources) > 0 || len(r.ResourceTemplates) > 0 || len(r.Prompts) > 0,
 		})
 	}
 	return servers
@@ -246,6 +264,7 @@ func writeTextReports(reportDir string, results []*models.MCPServer) error {
 		"exposed.txt":       buildFindingsText(results, func(s *models.MCPServer) bool { return s.NoAuth && !s.AuthRequired }),
 		"auth_required.txt": buildFindingsText(results, func(s *models.MCPServer) bool { return s.AuthRequired }),
 		"tools.txt":         buildToolsText(results),
+		"evidence.txt":      buildEvidenceText(results),
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(reportDir, name), []byte(content), 0644); err != nil {
@@ -302,6 +321,31 @@ func buildToolsText(results []*models.MCPServer) string {
 	return b.String()
 }
 
+func buildEvidenceText(results []*models.MCPServer) string {
+	var b strings.Builder
+	for _, s := range results {
+		fmt.Fprintf(&b, "%s\n", reportURL(s))
+		fmt.Fprintf(&b, "  transport: %s\n", htmlTransportLabel(s.Transport))
+		fmt.Fprintf(&b, "  protocol: %s\n", emptyAsUnknown(s.ProtocolVersion))
+		fmt.Fprintf(&b, "  status: %s\n", statusLabel(s))
+		fmt.Fprintf(&b, "  score: %.2f\n", s.FingerprintScore)
+		if s.Evidence.JSONRPC.RequestMethod != "" || len(s.Evidence.JSONRPC.ResultKeys) > 0 || s.Evidence.JSONRPC.HasError {
+			fmt.Fprintf(&b, "  jsonrpc: %s\n", formatJSONRPCSummary(s.Evidence.JSONRPC))
+		}
+		if len(s.Evidence.Fingerprint.Signals) > 0 {
+			fmt.Fprintf(&b, "  fingerprint: %s\n", strings.Join(s.Evidence.Fingerprint.Signals, ", "))
+		}
+		if len(s.Evidence.Auth.Reasons) > 0 {
+			fmt.Fprintf(&b, "  auth: %s\n", strings.Join(s.Evidence.Auth.Reasons, "; "))
+		}
+		for _, header := range formatHeaders(s.Evidence.ResponseHeaders) {
+			fmt.Fprintf(&b, "  header: %s\n", header)
+		}
+		fmt.Fprintf(&b, "\n")
+	}
+	return b.String()
+}
+
 func reportURL(s *models.MCPServer) string {
 	return s.URL + s.Endpoint
 }
@@ -328,6 +372,60 @@ func oneLine(v string) string {
 	v = strings.ReplaceAll(v, "\n", " ")
 	v = strings.ReplaceAll(v, "\t", " ")
 	return strings.TrimSpace(v)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func formatHeaders(headers map[string]string) []string {
+	if len(headers) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(headers))
+	for key := range headers {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, fmt.Sprintf("%s: %s", key, oneLine(headers[key])))
+	}
+	return out
+}
+
+func formatJSONRPCSummary(s models.JSONRPCSummary) string {
+	parts := []string{}
+	if s.RequestMethod != "" {
+		parts = append(parts, "method="+s.RequestMethod)
+	}
+	if s.StatusCode != 0 {
+		parts = append(parts, fmt.Sprintf("status=%d", s.StatusCode))
+	}
+	if len(s.ResultKeys) > 0 {
+		parts = append(parts, "result_keys="+strings.Join(s.ResultKeys, ","))
+	} else if s.HasResult {
+		parts = append(parts, "result=true")
+	}
+	if s.HasError {
+		errText := "error=true"
+		if s.ErrorCode != "" {
+			errText = "error=" + s.ErrorCode
+		}
+		if s.ErrorMessage != "" {
+			errText += ":" + oneLine(s.ErrorMessage)
+		}
+		parts = append(parts, errText)
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, "  ")
 }
 
 func htmlTransportLabel(t models.Transport) string {
@@ -384,10 +482,16 @@ func zhReportLanguage() reportLanguage {
 		NoResults:            "没有发现 MCP 服务。",
 		UnavailableAuth:      "该服务需要认证，工具和资源详情不可用。",
 		HoneypotSignals:      "蜜罐信号",
+		NoExposedDetails:     "No exposed tools, resources, templates, or prompts.",
 		ToolList:             "工具列表",
 		ResourceList:         "资源列表",
 		ResourceTemplateList: "资源模板",
 		PromptList:           "提示词",
+		Evidence:             "证据",
+		ResponseHeaders:      "响应头",
+		JSONRPC:              "JSON-RPC",
+		FingerprintSignals:   "指纹",
+		AuthReasons:          "认证原因",
 		None:                 "无",
 	}
 }
@@ -419,10 +523,16 @@ func enReportLanguage() reportLanguage {
 		NoResults:            "No MCP services found.",
 		UnavailableAuth:      "This service requires authentication. Tool and resource details are unavailable.",
 		HoneypotSignals:      "Honeypot signals",
+		NoExposedDetails:     "No exposed tools, resources, templates, or prompts.",
 		ToolList:             "Tools",
 		ResourceList:         "Resources",
 		ResourceTemplateList: "Resource templates",
 		PromptList:           "Prompts",
+		Evidence:             "Evidence",
+		ResponseHeaders:      "Headers",
+		JSONRPC:              "JSON-RPC",
+		FingerprintSignals:   "Fingerprint",
+		AuthReasons:          "Auth reasons",
 		None:                 "None",
 	}
 }
@@ -509,7 +619,8 @@ var htmlTemplate = template.Must(template.New("html-report").Parse(`<!doctype ht
       background: #eef2f6;
       padding: 2px 5px;
       border-radius: 4px;
-      word-break: break-all;
+      word-break: break-word;
+      overflow-wrap: anywhere;
     }
     .pill {
       display: inline-block;
@@ -535,6 +646,29 @@ var htmlTemplate = template.Must(template.New("html-report").Parse(`<!doctype ht
     }
     .kv { border: 1px solid var(--line); border-radius: 6px; padding: 10px; background: #fbfcfd; }
     .kv span { display: block; color: var(--muted); font-size: 12px; }
+    .kv, .kv code, .kv div {
+      min-width: 0;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .evidence-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .evidence-grid .kv {
+      overflow: hidden;
+    }
+    .evidence-grid .wide {
+      grid-column: 1 / -1;
+    }
+    .reason-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
     ul { padding-left: 20px; margin: 8px 0 0; }
     li { margin: 5px 0; }
     .description { color: var(--muted); margin-left: 4px; }
@@ -549,6 +683,8 @@ var htmlTemplate = template.Must(template.New("html-report").Parse(`<!doctype ht
       header { padding: 22px 20px 18px; }
       .summary-grid { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
       .detail-grid { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+      .evidence-grid { grid-template-columns: minmax(0, 1fr); }
+      .evidence-grid .wide { grid-column: auto; }
     }
   </style>
 </head>
@@ -614,6 +750,19 @@ var htmlTemplate = template.Must(template.New("html-report").Parse(`<!doctype ht
             <div class="kv"><span>{{$.Lang.Protocol}}</span>{{.ProtocolVersion}}</div>
             <div class="kv"><span>{{$.Lang.Score}}</span>{{.FingerprintScore}}</div>
           </div>
+          <h3>{{$.Lang.Evidence}}</h3>
+          <div class="evidence-grid">
+            <div class="kv wide"><span>URL</span><code>{{.EvidenceURL}}</code></div>
+            <div class="kv"><span>{{$.Lang.JSONRPC}}</span>{{.JSONRPCSummary}}</div>
+            <div class="kv"><span>{{$.Lang.FingerprintSignals}}</span>{{if .FingerprintSignals}}{{.FingerprintSignals}}{{else}}-{{end}}</div>
+            <div class="kv wide"><span>{{$.Lang.AuthReasons}}</span>{{if .AuthReasons}}<div class="reason-list">{{range .AuthReasons}}<div>{{.}}</div>{{end}}</div>{{else}}-{{end}}</div>
+          </div>
+          {{if .ResponseHeaders}}
+          <h3>{{$.Lang.ResponseHeaders}}</h3>
+          <ul>
+            {{range .ResponseHeaders}}<li><code>{{.}}</code></li>{{end}}
+          </ul>
+          {{end}}
           {{if .AuthRequired}}
             <p class="muted">{{$.Lang.UnavailableAuth}}</p>
           {{end}}
@@ -621,33 +770,37 @@ var htmlTemplate = template.Must(template.New("html-report").Parse(`<!doctype ht
             <p><strong>{{$.Lang.HoneypotSignals}}:</strong> {{.HoneypotSignals}}</p>
           {{end}}
 
-          <h3>{{$.Lang.ToolList}}</h3>
+          {{if .HasAnyDetails}}
           {{if .Tools}}
+          <h3>{{$.Lang.ToolList}}</h3>
           <ul>
             {{range .Tools}}<li><strong>{{.Name}}</strong>{{if .Description}} <span class="description">{{.Description}}</span>{{end}}</li>{{end}}
           </ul>
-          {{else}}<p class="muted">{{$.Lang.None}}</p>{{end}}
+          {{end}}
 
-          <h3>{{$.Lang.ResourceList}}</h3>
           {{if .Resources}}
+          <h3>{{$.Lang.ResourceList}}</h3>
           <ul>
             {{range .Resources}}<li><strong>{{.URI}}</strong>{{if .Name}} <span class="description">{{.Name}}</span>{{end}}</li>{{end}}
           </ul>
-          {{else}}<p class="muted">{{$.Lang.None}}</p>{{end}}
+          {{end}}
 
-          <h3>{{$.Lang.ResourceTemplateList}}</h3>
           {{if .ResourceTemplates}}
+          <h3>{{$.Lang.ResourceTemplateList}}</h3>
           <ul>
             {{range .ResourceTemplates}}<li><strong>{{.URITemplate}}</strong>{{if .Name}} <span class="description">{{.Name}}</span>{{end}}</li>{{end}}
           </ul>
-          {{else}}<p class="muted">{{$.Lang.None}}</p>{{end}}
+          {{end}}
 
-          <h3>{{$.Lang.PromptList}}</h3>
           {{if .Prompts}}
+          <h3>{{$.Lang.PromptList}}</h3>
           <ul>
             {{range .Prompts}}<li><strong>{{.Name}}</strong>{{if .Description}} <span class="description">{{.Description}}</span>{{end}}</li>{{end}}
           </ul>
-          {{else}}<p class="muted">{{$.Lang.None}}</p>{{end}}
+          {{end}}
+          {{else}}
+          <p class="muted">{{$.Lang.NoExposedDetails}}</p>
+          {{end}}
         </div>
       </details>
       {{end}}

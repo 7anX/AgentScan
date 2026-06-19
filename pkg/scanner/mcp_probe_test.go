@@ -41,6 +41,15 @@ func TestBuildProbeEndpointsDoesNotExpandKnownEndpoint(t *testing.T) {
 	}
 }
 
+func TestSSEProbeSessionTimeoutIsBounded(t *testing.T) {
+	if got := sseProbeSessionTimeout(time.Second); got != 5*time.Second {
+		t.Fatalf("small timeout = %v, want 5s", got)
+	}
+	if got := sseProbeSessionTimeout(10 * time.Second); got != 12*time.Second {
+		t.Fatalf("large timeout = %v, want 12s", got)
+	}
+}
+
 func TestProbeMCPWithHostnameFindsSSEUnderMountPrefix(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/prefix/sse" && r.Method == http.MethodGet {
@@ -130,4 +139,22 @@ func TestTryHTTPSSELegacyAcceptsMCPInitializeResponse(t *testing.T) {
 	if got.ServerName != "demo" || got.ProtocolVersion != "2024-11-05" {
 		t.Fatalf("unexpected result: %#v", got)
 	}
+	if got.Evidence.URL == "" {
+		t.Fatalf("Evidence.URL is empty: %#v", got.Evidence)
+	}
+	if !got.Evidence.JSONRPC.HasResult {
+		t.Fatalf("Evidence.JSONRPC.HasResult = false, want true: %#v", got.Evidence.JSONRPC)
+	}
+	if !containsString(got.Evidence.Fingerprint.Signals, "server_info.name") {
+		t.Fatalf("fingerprint signals = %v, want server_info.name", got.Evidence.Fingerprint.Signals)
+	}
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }

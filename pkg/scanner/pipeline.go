@@ -58,6 +58,52 @@ func candidateTimeoutDuration(cfg models.ScanConfig) time.Duration {
 	return base
 }
 
+func slowCandidateThreshold(cfg models.ScanConfig) time.Duration {
+	threshold := time.Duration(cfg.TimeoutMCPMs) * time.Millisecond
+	if threshold < 5*time.Second {
+		return 5 * time.Second
+	}
+	if threshold > 15*time.Second {
+		return 15 * time.Second
+	}
+	return threshold
+}
+
+type slowTarget struct {
+	Label    string
+	Elapsed  time.Duration
+	Hit      bool
+	Endpoint string
+}
+
+func printSlowTargets(items []slowTarget) {
+	if len(items) == 0 {
+		return
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].Elapsed > items[j].Elapsed
+	})
+	limit := len(items)
+	if limit > 10 {
+		limit = 10
+	}
+	fmt.Fprintf(os.Stderr, "slow targets (top %d/%d)\n", limit, len(items))
+	for i := 0; i < limit; i++ {
+		item := items[i]
+		status := "miss"
+		if item.Hit {
+			status = "hit"
+		}
+		endpoint := item.Endpoint
+		if endpoint == "" {
+			endpoint = "-"
+		}
+		fmt.Fprintf(os.Stderr, "      %-35s %6.1fs  %-4s %s\n",
+			item.Label, item.Elapsed.Seconds(), status, endpoint)
+	}
+	fmt.Fprintf(os.Stderr, "\n")
+}
+
 // Run 执行完整扫描，返回所有结果（按风险分从高到低排序）
 func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.MCPServer {
 	// Stage 1: 端口扫描（--skip-port-scan 时跳过，所有输入视为已开放）
@@ -126,6 +172,9 @@ func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.M
 	sem := make(chan struct{}, mcpConc)
 	var mu sync.Mutex
 	var results []*models.MCPServer
+	var slowMu sync.Mutex
+	var slowTargets []slowTarget
+	slowThreshold := slowCandidateThreshold(p.cfg)
 	var wg sync.WaitGroup
 
 	for _, cand := range candidates {
@@ -143,9 +192,25 @@ func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.M
 			defer func() { <-sem }()
 			defer done.Add(1)
 
+			start := time.Now()
 			candidateCtx, cancelCandidate := context.WithTimeout(ctx, candidateTimeoutDuration(p.cfg))
 			server := p.analyzeCandidate(candidateCtx, c)
 			cancelCandidate()
+			elapsed := time.Since(start)
+
+			if elapsed >= slowThreshold {
+				label := fmt.Sprintf("%s:%d", c.IP, c.Port)
+				if c.Hostname != "" {
+					label = fmt.Sprintf("%s:%d", c.Hostname, c.Port)
+				}
+				st := slowTarget{Label: label, Elapsed: elapsed, Hit: server != nil}
+				if server != nil {
+					st.Endpoint = server.Endpoint
+				}
+				slowMu.Lock()
+				slowTargets = append(slowTargets, st)
+				slowMu.Unlock()
+			}
 
 			if server == nil {
 				return
@@ -173,6 +238,7 @@ done:
 	progressWG.Wait()
 
 	fmt.Fprintf(os.Stderr, "      %d confirmed\n\n", len(results))
+	printSlowTargets(slowTargets)
 
 	// 按 FingerprintScore 从高到低排序
 	sort.Slice(results, func(i, j int) bool {
@@ -204,6 +270,7 @@ func (p *Pipeline) analyzeCandidate(ctx context.Context, c HTTPCandidate) *model
 		AuthRequired:     probe.AuthRequired,
 		ResponseTimeMs:   probe.ResponseTimeMs,
 		TLSEnabled:       strings.HasPrefix(c.BaseURL, "https"), // Bug6 fix: 避免 magic length
+		Evidence:         probe.Evidence,
 		ScanTime:         time.Now(),
 	}
 
@@ -339,8 +406,8 @@ func RunScan(ctx context.Context, rawTargets []string, filePath string,
 	fmt.Fprintf(os.Stderr, "AgentScan  %d host(s)  %d port(s)  %d probe(s)\n",
 		hostCount, len(cfg.Ports), len(targets))
 	fmt.Fprintf(os.Stderr, "           ports=%s\n", portList)
-	fmt.Fprintf(os.Stderr, "           threads=%d  timeout=%dms  mcp-threads=%d%s\n",
-		cfg.Concurrency, cfg.TimeoutConnectMs, cfg.MCPConcurrency, skipStr)
+	fmt.Fprintf(os.Stderr, "           threads=%d  connect-timeout=%dms  http-timeout=%dms  mcp-timeout=%dms  mcp-threads=%d%s\n",
+		cfg.Concurrency, cfg.TimeoutConnectMs, cfg.TimeoutHTTPMs, cfg.TimeoutMCPMs, cfg.MCPConcurrency, skipStr)
 	if outputPath != "" {
 		fmt.Fprintf(os.Stderr, "           output=%s\n", outputPath)
 	}
@@ -372,6 +439,7 @@ func RunScan(ctx context.Context, rawTargets []string, filePath string,
 		}
 	}
 
+	fmt.Fprintf(os.Stderr, "report     generating html/txt files...\n")
 	reportDir, err := output.WriteHTMLReports(results, htmlReportBaseDir(outputPath))
 	if err != nil {
 		return results, fmt.Errorf("write HTML report: %w", err)

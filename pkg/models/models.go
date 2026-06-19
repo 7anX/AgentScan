@@ -62,36 +62,74 @@ type HoneypotResult struct {
 	Signals   []string `json:"signals,omitempty"`
 }
 
+// JSONRPCSummary records the small, reproducible part of a JSON-RPC response.
+type JSONRPCSummary struct {
+	RequestMethod string   `json:"request_method,omitempty"`
+	StatusCode    int      `json:"status_code,omitempty"`
+	ContentType   string   `json:"content_type,omitempty"`
+	HasResult     bool     `json:"has_result"`
+	ResultKeys    []string `json:"result_keys,omitempty"`
+	HasError      bool     `json:"has_error"`
+	ErrorCode     string   `json:"error_code,omitempty"`
+	ErrorMessage  string   `json:"error_message,omitempty"`
+}
+
+// FingerprintEvidence explains why a response was classified as MCP.
+type FingerprintEvidence struct {
+	Score   float64  `json:"score"`
+	Signals []string `json:"signals,omitempty"`
+}
+
+// AuthEvidence explains the auth/no-auth classification.
+type AuthEvidence struct {
+	Status  string   `json:"status,omitempty"`
+	Reasons []string `json:"reasons,omitempty"`
+}
+
+// MCPEvidence is the per-finding proof chain used by JSON/HTML/TXT reports.
+type MCPEvidence struct {
+	URL              string              `json:"url,omitempty"`
+	Transport        Transport           `json:"transport,omitempty"`
+	ProtocolVersion  string              `json:"protocol_version,omitempty"`
+	ResponseHeaders  map[string]string   `json:"response_headers,omitempty"`
+	JSONRPC          JSONRPCSummary      `json:"jsonrpc,omitempty"`
+	Fingerprint      FingerprintEvidence `json:"fingerprint,omitempty"`
+	Auth             AuthEvidence        `json:"auth,omitempty"`
+	ResponseTimeMs   float64             `json:"response_time_ms,omitempty"`
+	ResolvedPostPath string              `json:"resolved_post_path,omitempty"`
+}
+
 // MCPServer 扫描结果（只保留存活信息，不做风险评估）
 type MCPServer struct {
-	IP               string          `json:"ip"`
-	Port             int             `json:"port"`
-	Hostname         string          `json:"hostname,omitempty"`
-	URL              string          `json:"url"`
-	Endpoint         string          `json:"endpoint"`
-	Transport        Transport       `json:"transport"`
-	FingerprintScore float64         `json:"fingerprint_score"`
-	NoAuth           bool            `json:"no_auth"`
-	AuthRequired     bool            `json:"auth_required,omitempty"`
-	ServerName       string          `json:"server_name,omitempty"`
-	ServerVersion    string          `json:"server_version,omitempty"`
-	ProtocolVersion  string          `json:"protocol_version,omitempty"`
-	Capabilities     MCPCapabilities `json:"capabilities"`
-	SessionID        string          `json:"session_id,omitempty"`
-	Tools            []MCPTool       `json:"tools,omitempty"`
-	ToolCount        int             `json:"tool_count"`
-	Resources             []MCPResource        `json:"resources,omitempty"`
-	ResourceCount         int                  `json:"resource_count"`
+	IP                    string                `json:"ip"`
+	Port                  int                   `json:"port"`
+	Hostname              string                `json:"hostname,omitempty"`
+	URL                   string                `json:"url"`
+	Endpoint              string                `json:"endpoint"`
+	Transport             Transport             `json:"transport"`
+	FingerprintScore      float64               `json:"fingerprint_score"`
+	NoAuth                bool                  `json:"no_auth"`
+	AuthRequired          bool                  `json:"auth_required,omitempty"`
+	ServerName            string                `json:"server_name,omitempty"`
+	ServerVersion         string                `json:"server_version,omitempty"`
+	ProtocolVersion       string                `json:"protocol_version,omitempty"`
+	Capabilities          MCPCapabilities       `json:"capabilities"`
+	SessionID             string                `json:"session_id,omitempty"`
+	Tools                 []MCPTool             `json:"tools,omitempty"`
+	ToolCount             int                   `json:"tool_count"`
+	Resources             []MCPResource         `json:"resources,omitempty"`
+	ResourceCount         int                   `json:"resource_count"`
 	ResourceTemplates     []MCPResourceTemplate `json:"resource_templates,omitempty"`
-	ResourceTemplateCount int                  `json:"resource_template_count"`
-	Prompts               []MCPPrompt          `json:"prompts,omitempty"`
-	PromptCount           int                  `json:"prompt_count"`
-	Honeypot         HoneypotResult  `json:"honeypot"`
-	ScanTime         time.Time       `json:"scan_time"`
-	ResponseTimeMs   float64         `json:"response_time_ms"`
-	TLSEnabled       bool            `json:"tls_enabled"`
-	RawInitResponse  json.RawMessage `json:"raw_init_response,omitempty"`
-	Error            string          `json:"error,omitempty"`
+	ResourceTemplateCount int                   `json:"resource_template_count"`
+	Prompts               []MCPPrompt           `json:"prompts,omitempty"`
+	PromptCount           int                   `json:"prompt_count"`
+	Honeypot              HoneypotResult        `json:"honeypot"`
+	ScanTime              time.Time             `json:"scan_time"`
+	ResponseTimeMs        float64               `json:"response_time_ms"`
+	TLSEnabled            bool                  `json:"tls_enabled"`
+	Evidence              MCPEvidence           `json:"evidence,omitempty"`
+	RawInitResponse       json.RawMessage       `json:"raw_init_response,omitempty"`
+	Error                 string                `json:"error,omitempty"`
 }
 
 // ScanConfig 扫描配置

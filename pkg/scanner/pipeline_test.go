@@ -26,6 +26,15 @@ func TestCandidateTimeoutDurationIsBounded(t *testing.T) {
 	}
 }
 
+func TestSlowCandidateThresholdIsBounded(t *testing.T) {
+	if got := slowCandidateThreshold(models.ScanConfig{TimeoutMCPMs: 1000}); got != 5*time.Second {
+		t.Fatalf("small threshold = %v, want 5s", got)
+	}
+	if got := slowCandidateThreshold(models.ScanConfig{TimeoutMCPMs: 30000}); got != 15*time.Second {
+		t.Fatalf("large threshold = %v, want 15s", got)
+	}
+}
+
 func TestDedupeTargetsKeepsHostnameAndProtoDistinct(t *testing.T) {
 	input := []target.Target{
 		{IP: "203.0.113.10", Port: 443, Hostname: "a.example", URLPath: "/mcp", Proto: "https"},

@@ -26,6 +26,26 @@ func TestWriteHTMLReportsCreatesChineseAndEnglishReports(t *testing.T) {
 			ResourceCount:         0,
 			ResourceTemplateCount: 0,
 			PromptCount:           0,
+			Evidence: models.MCPEvidence{
+				URL: "http://127.0.0.1:8001/mcp",
+				ResponseHeaders: map[string]string{
+					"Content-Type": "application/json",
+				},
+				JSONRPC: models.JSONRPCSummary{
+					RequestMethod: "initialize",
+					StatusCode:    200,
+					HasResult:     true,
+					ResultKeys:    []string{"capabilities", "protocolVersion", "serverInfo"},
+				},
+				Fingerprint: models.FingerprintEvidence{
+					Score:   0.85,
+					Signals: []string{"protocol_version", "server_info.name"},
+				},
+				Auth: models.AuthEvidence{
+					Status:  "no-auth",
+					Reasons: []string{"initialize returned a valid MCP JSON-RPC result"},
+				},
+			},
 			Tools: []models.MCPTool{
 				{Name: "z-last", Description: "later"},
 				{Name: "search", Description: "search docs"},
@@ -54,7 +74,7 @@ func TestWriteHTMLReportsCreatesChineseAndEnglishReports(t *testing.T) {
 		{
 			name:    "en",
 			content: en,
-			want:    []string{"AgentScan Report", "Servers", "127.0.0.1:8001/mcp", "search docs", `data-sort="score"`},
+			want:    []string{"AgentScan Report", "Servers", "127.0.0.1:8001/mcp", "search docs", `data-sort="score"`, "Evidence", "server_info.name", "evidence-grid", "overflow-wrap: anywhere"},
 		},
 	} {
 		for _, want := range item.want {
@@ -68,6 +88,7 @@ func TestWriteHTMLReportsCreatesChineseAndEnglishReports(t *testing.T) {
 	exposed := readFileForTest(t, filepath.Join(dir, "exposed.txt"))
 	allFindings := readFileForTest(t, filepath.Join(dir, "all_findings.txt"))
 	tools := readFileForTest(t, filepath.Join(dir, "tools.txt"))
+	evidence := readFileForTest(t, filepath.Join(dir, "evidence.txt"))
 
 	for _, item := range []struct {
 		name    string
@@ -78,6 +99,7 @@ func TestWriteHTMLReportsCreatesChineseAndEnglishReports(t *testing.T) {
 		{name: "exposed", content: exposed, want: "http://127.0.0.1:8001/mcp"},
 		{name: "all_findings", content: allFindings, want: "streamable-http"},
 		{name: "tools", content: tools, want: "search docs"},
+		{name: "evidence", content: evidence, want: "fingerprint: protocol_version, server_info.name"},
 	} {
 		if !strings.Contains(item.content, item.want) {
 			t.Fatalf("%s missing %q\n%s", item.name, item.want, item.content)

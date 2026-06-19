@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -77,6 +79,7 @@ type ProbeResult struct {
 	ServerVersion    string
 	Capabilities     map[string]interface{}
 	RawResponse      json.RawMessage
+	Evidence         models.MCPEvidence
 	NoAuth           bool
 	AuthRequired     bool // MCP 服务器存在但需要认证
 	ResponseTimeMs   float64
@@ -168,7 +171,12 @@ func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string
 					bestNoAuth = res.r
 					bestNoAuthPriority = res.priority
 				}
+				if res.r.FingerprintScore >= 0.55 {
+					cancelAll()
+					return res.r
+				}
 				if res.priority == 0 {
+					cancelAll()
 					return bestNoAuth
 				}
 			} else {
@@ -277,6 +285,18 @@ func isSSEEndpoint(ctx context.Context, client *http.Client, url string) bool {
 }
 
 // tryStreamableHTTP POST /mcp 尝试 Streamable HTTP（2025-03-26+）
+
+func sseProbeSessionTimeout(timeout time.Duration) time.Duration {
+	d := timeout * 2
+	if d < 5*time.Second {
+		return 5 * time.Second
+	}
+	if d > 12*time.Second {
+		return 12 * time.Second
+	}
+	return d
+}
+
 // endpoint 参数用于辅助 auth-required 判断（/mcp、/sse 等 MCP 特征路径名）
 func tryStreamableHTTP(ctx context.Context, client *http.Client, url, endpoint string) *ProbeResult {
 	// 单个端点探测最多等 3 秒，避免 20 个端点串行时总超时爆炸
@@ -300,19 +320,37 @@ func tryStreamableHTTP(ctx context.Context, client *http.Client, url, endpoint s
 	}
 	defer resp.Body.Close()
 	elapsed := float64(time.Since(start).Milliseconds())
+	headers := relevantHeaders(resp.Header)
 
 	if resp.StatusCode != 200 {
 		// 检测是否为需要认证的 MCP 服务器（三个条件同时满足才报告，避免误报）：
 		// 1. 状态码明确表示认证失败（401/403），或 400 且带 WWW-Authenticate
 		// 2. 响应体包含 "jsonrpc" 字段（JSON-RPC 协议特征）
 		// 3. 响应体包含 "error" 字段，或响应头有 MCP-Session-Id / MCP-Protocol-Version
-		if isMCPAuthRequired(resp, endpoint) {
+		authRequired, authEvidence := isMCPAuthRequiredWithEvidence(resp, endpoint)
+		if authRequired {
 			return &ProbeResult{
 				Transport:        models.TransportStreamableHTTP,
 				FingerprintScore: 0.5, // 固定中间分：确认是 MCP，但无法完整指纹
 				NoAuth:           false,
 				AuthRequired:     true,
 				ResponseTimeMs:   elapsed,
+				Evidence: models.MCPEvidence{
+					URL:             url,
+					Transport:       models.TransportStreamableHTTP,
+					ResponseHeaders: headers,
+					JSONRPC: models.JSONRPCSummary{
+						RequestMethod: "initialize",
+						StatusCode:    resp.StatusCode,
+						ContentType:   resp.Header.Get("Content-Type"),
+					},
+					Fingerprint: models.FingerprintEvidence{
+						Score:   0.5,
+						Signals: []string{"auth_required_mcp_signals"},
+					},
+					Auth:           authEvidence,
+					ResponseTimeMs: elapsed,
+				},
 			}
 		}
 		return nil
@@ -329,13 +367,32 @@ func tryStreamableHTTP(ctx context.Context, client *http.Client, url, endpoint s
 		if err := json.NewDecoder(limitedBody).Decode(&data); err != nil {
 			// decode 失败，但如果有 MCP 专有响应头，说明服务存在（宁可误报不漏）
 			if resp.Header.Get("Mcp-Session-Id") != "" || resp.Header.Get("Mcp-Protocol-Version") != "" {
+				protocolVersion := resp.Header.Get("Mcp-Protocol-Version")
 				return &ProbeResult{
 					Transport:        models.TransportStreamableHTTP,
 					FingerprintScore: 0.4,
 					SessionID:        resp.Header.Get("Mcp-Session-Id"),
+					ProtocolVersion:  protocolVersion,
 					NoAuth:           true,
 					AuthRequired:     false,
 					ResponseTimeMs:   elapsed,
+					Evidence: models.MCPEvidence{
+						URL:             url,
+						Transport:       models.TransportStreamableHTTP,
+						ProtocolVersion: protocolVersion,
+						ResponseHeaders: headers,
+						JSONRPC: models.JSONRPCSummary{
+							RequestMethod: "initialize",
+							StatusCode:    resp.StatusCode,
+							ContentType:   resp.Header.Get("Content-Type"),
+						},
+						Fingerprint: models.FingerprintEvidence{
+							Score:   0.4,
+							Signals: []string{"mcp_response_header"},
+						},
+						Auth:           models.AuthEvidence{Status: "no-auth", Reasons: []string{"initialize endpoint responded without an auth challenge"}},
+						ResponseTimeMs: elapsed,
+					},
 				}
 			}
 			return nil
@@ -346,10 +403,11 @@ func tryStreamableHTTP(ctx context.Context, client *http.Client, url, endpoint s
 		return nil
 	}
 
-	score, serverName, serverVer, protocolVer, caps := scoreFingerprint(data)
+	score, serverName, serverVer, protocolVer, caps, fingerprint := scoreFingerprintDetailed(data)
 	if score < 0.35 {
 		return nil // 太低，跳过
 	}
+	fingerprint.Score = score
 
 	return &ProbeResult{
 		Transport:        models.TransportStreamableHTTP,
@@ -362,6 +420,16 @@ func tryStreamableHTTP(ctx context.Context, client *http.Client, url, endpoint s
 		RawResponse:      marshalRaw(data),
 		NoAuth:           true, // 能连上且无认证头
 		ResponseTimeMs:   elapsed,
+		Evidence: models.MCPEvidence{
+			URL:             url,
+			Transport:       models.TransportStreamableHTTP,
+			ProtocolVersion: protocolVer,
+			ResponseHeaders: headers,
+			JSONRPC:         summarizeJSONRPC("initialize", resp.StatusCode, resp.Header.Get("Content-Type"), data),
+			Fingerprint:     fingerprint,
+			Auth:            models.AuthEvidence{Status: "no-auth", Reasons: []string{"initialize returned a valid MCP JSON-RPC result without auth challenge"}},
+			ResponseTimeMs:  elapsed,
+		},
 	}
 }
 
@@ -372,7 +440,7 @@ func tryStreamableHTTP(ctx context.Context, client *http.Client, url, endpoint s
 func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL, ssePath string, timeout time.Duration) *ProbeResult {
 	// 整个 SSE 会话使用独立超时，并跟随外层 ctx 取消。
 	// 12s：GET握手(~1s) + endpoint event(~1s) + POST(~1s) + SSE message回推(~3s) + 跨国链路余量
-	sessCtx, sessCancel := context.WithTimeout(ctx, 12*time.Second)
+	sessCtx, sessCancel := context.WithTimeout(ctx, sseProbeSessionTimeout(timeout))
 	defer sessCancel()
 
 	// Step 1: 建立 SSE 连接并启动监听 goroutine
@@ -391,12 +459,31 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL, ssePath
 	if sseResp.StatusCode != 200 {
 		// SSE GET 被拒绝（401/403）→ 可能是需要认证的 SSE legacy 服务
 		if sseResp.StatusCode == 401 || sseResp.StatusCode == 403 {
+			headers := relevantHeaders(sseResp.Header)
 			io.Copy(io.Discard, io.LimitReader(sseResp.Body, 4096)) //nolint:errcheck
 			return &ProbeResult{
 				Transport:        models.TransportHTTPSSELegacy,
 				FingerprintScore: 0.5,
 				NoAuth:           false,
 				AuthRequired:     true,
+				Evidence: models.MCPEvidence{
+					URL:             baseURL + ssePath,
+					Transport:       models.TransportHTTPSSELegacy,
+					ResponseHeaders: headers,
+					JSONRPC: models.JSONRPCSummary{
+						RequestMethod: "sse-connect",
+						StatusCode:    sseResp.StatusCode,
+						ContentType:   sseResp.Header.Get("Content-Type"),
+					},
+					Fingerprint: models.FingerprintEvidence{
+						Score:   0.5,
+						Signals: []string{"sse_endpoint_auth_challenge"},
+					},
+					Auth: models.AuthEvidence{
+						Status:  "auth-required",
+						Reasons: []string{fmt.Sprintf("SSE endpoint returned HTTP %d", sseResp.StatusCode)},
+					},
+				},
 			}
 		}
 		return nil
@@ -449,6 +536,7 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL, ssePath
 	}
 	defer postResp.Body.Close()
 	elapsed := float64(time.Since(start).Milliseconds())
+	postHeaders := relevantHeaders(postResp.Header)
 
 	switch postResp.StatusCode {
 	case 200:
@@ -456,21 +544,45 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL, ssePath
 		if err := json.NewDecoder(io.LimitReader(postResp.Body, 1<<20)).Decode(&data); err != nil {
 			return nil
 		}
-		score, serverName, serverVer, protocolVer, caps := scoreFingerprint(data)
+		score, serverName, serverVer, protocolVer, caps, fingerprint := scoreFingerprintDetailed(data)
 		if score < 0.35 {
 			return nil
 		}
-		return sseProbeResult(resolvedPostPath, elapsed, score, serverName, serverVer, protocolVer, caps, marshalRaw(data))
+		fingerprint.Score = score
+		evidence := models.MCPEvidence{
+			URL:              baseURL + ssePath,
+			Transport:        models.TransportHTTPSSELegacy,
+			ProtocolVersion:  protocolVer,
+			ResponseHeaders:  postHeaders,
+			JSONRPC:          summarizeJSONRPC("initialize", postResp.StatusCode, postResp.Header.Get("Content-Type"), data),
+			Fingerprint:      fingerprint,
+			Auth:             models.AuthEvidence{Status: "no-auth", Reasons: []string{"legacy SSE initialize returned a valid MCP JSON-RPC result"}},
+			ResponseTimeMs:   elapsed,
+			ResolvedPostPath: resolvedPostPath,
+		}
+		return sseProbeResult(resolvedPostPath, elapsed, score, serverName, serverVer, protocolVer, caps, marshalRaw(data), evidence)
 
 	case 202:
 		// 异步响应：从 SSE 流等待 message event
 		select {
 		case data := <-msgCh:
-			score, serverName, serverVer, protocolVer, caps := scoreFingerprint(data)
+			score, serverName, serverVer, protocolVer, caps, fingerprint := scoreFingerprintDetailed(data)
 			if score < 0.35 {
 				return nil
 			}
-			return sseProbeResult(resolvedPostPath, elapsed, score, serverName, serverVer, protocolVer, caps, marshalRaw(data))
+			fingerprint.Score = score
+			evidence := models.MCPEvidence{
+				URL:              baseURL + ssePath,
+				Transport:        models.TransportHTTPSSELegacy,
+				ProtocolVersion:  protocolVer,
+				ResponseHeaders:  postHeaders,
+				JSONRPC:          summarizeJSONRPC("initialize", postResp.StatusCode, postResp.Header.Get("Content-Type"), data),
+				Fingerprint:      fingerprint,
+				Auth:             models.AuthEvidence{Status: "no-auth", Reasons: []string{"legacy SSE async initialize returned a valid MCP JSON-RPC result"}},
+				ResponseTimeMs:   elapsed,
+				ResolvedPostPath: resolvedPostPath,
+			}
+			return sseProbeResult(resolvedPostPath, elapsed, score, serverName, serverVer, protocolVer, caps, marshalRaw(data), evidence)
 		case <-sessCtx.Done():
 			return nil
 		}
@@ -481,7 +593,7 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL, ssePath
 }
 
 // sseProbeResult 构建 SSE legacy ProbeResult
-func sseProbeResult(postPath string, elapsed, score float64, serverName, serverVer, protocolVer string, caps map[string]interface{}, raw json.RawMessage) *ProbeResult {
+func sseProbeResult(postPath string, elapsed, score float64, serverName, serverVer, protocolVer string, caps map[string]interface{}, raw json.RawMessage, evidence models.MCPEvidence) *ProbeResult {
 	return &ProbeResult{
 		Transport:        models.TransportHTTPSSELegacy,
 		FingerprintScore: score,
@@ -493,6 +605,7 @@ func sseProbeResult(postPath string, elapsed, score float64, serverName, serverV
 		NoAuth:           true,
 		MessagePath:      postPath,
 		ResponseTimeMs:   elapsed,
+		Evidence:         evidence,
 	}
 }
 
@@ -504,24 +617,34 @@ func sseProbeResult(postPath string, elapsed, score float64, serverName, serverV
 //   - 例外1：protocolVersion + serverInfo.name 同时存在 → 两个规范 REQUIRED 字段，强制 0.35
 //   - 例外2：响应是 JSON-RPC 错误格式（有 "error" 无 "result"）→ 服务存在的证据，给 0.2 基础分
 func scoreFingerprint(data map[string]interface{}) (float64, string, string, string, map[string]interface{}) {
+	score, serverName, serverVer, protocolVer, caps, _ := scoreFingerprintDetailed(data)
+	return score, serverName, serverVer, protocolVer, caps
+}
+
+func scoreFingerprintDetailed(data map[string]interface{}) (float64, string, string, string, map[string]interface{}, models.FingerprintEvidence) {
+	evidence := models.FingerprintEvidence{}
 	result, ok := data["result"].(map[string]interface{})
 	if !ok {
 		// 没有 result 字段，但如果是 JSON-RPC error 响应，说明服务存在
 		// 给 0.2 分（低于阈值，由调用方决定是否兜底）
 		if _, hasErr := data["error"]; hasErr {
 			if v, _ := data["jsonrpc"].(string); v == "2.0" {
-				return 0.2, "", "", "", nil
+				evidence.Score = 0.2
+				evidence.Signals = append(evidence.Signals, "jsonrpc_error")
+				return 0.2, "", "", "", nil, evidence
 			}
 		}
-		return 0, "", "", "", nil
+		return 0, "", "", "", nil, evidence
 	}
 
 	score := 0.0
+	evidence.Signals = append(evidence.Signals, "jsonrpc_result")
 
 	// protocolVersion 存在 → +0.2
 	protocolVer, _ := result["protocolVersion"].(string)
 	if protocolVer != "" {
 		score += 0.2
+		evidence.Signals = append(evidence.Signals, "protocol_version")
 	}
 
 	// capabilities 含 MCP 特有 key → +0.3（出现 LSP key 直接返回 0）
@@ -530,10 +653,12 @@ func scoreFingerprint(data map[string]interface{}) (float64, string, string, str
 		caps = c
 		for k := range c {
 			if lspCapKeys[k] {
-				return 0, "", "", "", nil // 确定是 LSP
+				evidence.Signals = append(evidence.Signals, "lsp_capability_rejected")
+				return 0, "", "", "", nil, evidence // 确定是 LSP
 			}
 			if mcpCapKeys[k] {
 				score += 0.3
+				evidence.Signals = append(evidence.Signals, "capabilities."+k)
 				break
 			}
 		}
@@ -545,7 +670,8 @@ func scoreFingerprint(data map[string]interface{}) (float64, string, string, str
 		serverName, _ = si["name"].(string)
 		serverVer, _ = si["version"].(string)
 		if serverName != "" {
-			score += 0.1 // serverInfo 是 MCP 规范 REQUIRED，加分
+			score += 0.1
+			evidence.Signals = append(evidence.Signals, "server_info.name")
 		}
 	}
 
@@ -553,9 +679,11 @@ func scoreFingerprint(data map[string]interface{}) (float64, string, string, str
 	// 即便 capabilities 为空（合法）也应确认为 MCP，强制达到阈值。
 	if protocolVer != "" && serverName != "" && score < 0.35 {
 		score = 0.35
+		evidence.Signals = append(evidence.Signals, "required_fields_threshold")
 	}
 
-	return score, serverName, serverVer, protocolVer, caps
+	evidence.Score = score
+	return score, serverName, serverVer, protocolVer, caps, evidence
 }
 
 // InitializeRequest returns a pre-built MCP initialize request body for the given protocol version.
@@ -569,72 +697,111 @@ func marshalRaw(v interface{}) json.RawMessage {
 	return b
 }
 
-// isMCPAuthRequired 判断 4xx 响应是否来自需要认证的 MCP 服务器。
-// 综合多个信号打分，宁可误报不漏报：
-//   - MCP 特有响应头（MCP-Protocol-Version / MCP-Session-Id）：强信号 +2
-//   - 状态码 401/403，或 400 且带 WWW-Authenticate：认证拒绝信号 +1
-//   - 端点路径是 /mcp 或 /sse 等 MCP 特征路径：路径信号 +1
-//   - 响应体 Content-Type 是 application/json：JSON API 信号 +1
-//   - 响应体含 "jsonrpc" 字段：JSON-RPC 信号 +2
-//   - 响应体含 "error" 字段：错误响应信号 +1
-//
-// 总分 ≥ 2 即认为是 auth-required MCP（401/403 + MCP路径就足够，宁可误报不漏）
-// 排除的状态码：
-//   - 406 Not Acceptable：内容协商失败，不是认证错误
-//   - 404 Not Found：资源不存在（SSE legacy 无 session 的 /messages 返回 404，
-//     是正常业务逻辑，不是认证拒绝）
-func isMCPAuthRequired(resp *http.Response, endpoint string) bool {
+// relevantHeaders keeps only headers useful for reproducing MCP detection.
+func relevantHeaders(headers http.Header) map[string]string {
+	keys := []string{
+		"Content-Type",
+		"Server",
+		"WWW-Authenticate",
+		"MCP-Protocol-Version",
+		"MCP-Session-Id",
+		"Mcp-Protocol-Version",
+		"Mcp-Session-Id",
+		"Location",
+	}
+	out := make(map[string]string)
+	for _, key := range keys {
+		if value := headers.Get(key); value != "" {
+			out[http.CanonicalHeaderKey(key)] = value
+		}
+	}
+	return out
+}
+
+func summarizeJSONRPC(method string, statusCode int, contentType string, data map[string]interface{}) models.JSONRPCSummary {
+	summary := models.JSONRPCSummary{
+		RequestMethod: method,
+		StatusCode:    statusCode,
+		ContentType:   contentType,
+	}
+	if data == nil {
+		return summary
+	}
+	if result, ok := data["result"].(map[string]interface{}); ok {
+		summary.HasResult = true
+		for key := range result {
+			summary.ResultKeys = append(summary.ResultKeys, key)
+		}
+		sort.Strings(summary.ResultKeys)
+	}
+	if errVal, ok := data["error"]; ok && errVal != nil {
+		summary.HasError = true
+		if errMap, ok := errVal.(map[string]interface{}); ok {
+			if code, exists := errMap["code"]; exists {
+				summary.ErrorCode = fmt.Sprint(code)
+			}
+			if msg, _ := errMap["message"].(string); msg != "" {
+				summary.ErrorMessage = msg
+			}
+		}
+	}
+	return summary
+}
+
+// isMCPAuthRequiredWithEvidence explains whether a 4xx response is an MCP auth challenge.
+func isMCPAuthRequiredWithEvidence(resp *http.Response, endpoint string) (bool, models.AuthEvidence) {
+	evidence := models.AuthEvidence{Status: "unknown"}
 	switch resp.StatusCode {
 	case 406:
-		// 内容协商失败，调用方应换参数重试
-		return false
+		evidence.Reasons = append(evidence.Reasons, "HTTP 406 content negotiation failure")
+		return false, evidence
 	case 404:
-		// 资源不存在（SSE legacy 无有效 session 时 /messages 返回 404）
-		// 不是认证错误，排除
-		return false
+		evidence.Reasons = append(evidence.Reasons, "HTTP 404 endpoint not found")
+		return false, evidence
 	}
 
 	score := 0
-
-	// MCP 特有 header（最强信号）
+	code := resp.StatusCode
 	if resp.Header.Get("MCP-Protocol-Version") != "" || resp.Header.Get("MCP-Session-Id") != "" {
 		score += 2
+		evidence.Reasons = append(evidence.Reasons, "MCP response header present")
 	}
-
-	// 状态码信号
-	code := resp.StatusCode
 	if code == 401 || code == 403 || (code == 400 && resp.Header.Get("WWW-Authenticate") != "") {
-		score += 1
+		score++
+		evidence.Reasons = append(evidence.Reasons, fmt.Sprintf("HTTP %d auth challenge", code))
 	}
-
-	// 端点路径信号：已知 MCP 特征路径
 	if config.MCPAuthPaths[endpoint] {
-		score += 1
+		score++
+		evidence.Reasons = append(evidence.Reasons, "known MCP endpoint path")
 	}
 
-	// 响应体信号
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if err == nil && len(body) > 0 {
 		bodyStr := string(body)
-
-		// 400 + body 含 "session" → SSE legacy 的 session 错误（如 "No transport found for sessionId"、
-		// "Session not found"），不是认证拒绝，直接排除。
-		if code == 400 && strings.Contains(strings.ToLower(bodyStr), "session") {
-			return false
+		bodyLower := strings.ToLower(bodyStr)
+		if code == 400 && strings.Contains(bodyLower, "session") {
+			evidence.Reasons = append(evidence.Reasons, "session error is not treated as auth-required")
+			return false, evidence
 		}
-
-		isJSONContentType := strings.Contains(
-			strings.ToLower(resp.Header.Get("Content-Type")), "application/json")
-		if isJSONContentType {
-			score += 1
+		if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "application/json") {
+			score++
+			evidence.Reasons = append(evidence.Reasons, "JSON response body")
 		}
 		if strings.Contains(bodyStr, `"jsonrpc"`) {
 			score += 2
+			evidence.Reasons = append(evidence.Reasons, "JSON-RPC response body")
 		}
 		if strings.Contains(bodyStr, `"error"`) {
-			score += 1
+			score++
+			evidence.Reasons = append(evidence.Reasons, "JSON-RPC error response")
 		}
 	}
 
-	return score >= 2
+	if score >= 2 {
+		evidence.Status = "auth-required"
+		return true, evidence
+	}
+	evidence.Status = "not-auth-required"
+	evidence.Reasons = append(evidence.Reasons, fmt.Sprintf("auth score %d below threshold", score))
+	return false, evidence
 }
