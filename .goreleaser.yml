@@ -1,0 +1,63 @@
+version: 2
+
+project_name: agentscan
+
+before:
+  hooks:
+    - go mod tidy
+    - go mod verify
+
+builds:
+  - id: agentscan
+    main: .
+    binary: agentscan
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X 'github.com/agentscan/agentscan/internal/version.Version={{ .Version }}'
+      - -X 'github.com/agentscan/agentscan/internal/version.BuildTime={{ .Date }}'
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: default
+    name_template: >-
+      {{ .ProjectName }}_v{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - LICENSE*
+      - README*
+
+checksum:
+  name_template: "{{ .ProjectName }}_v{{ .Version }}_SHA256SUMS"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+
+release:
+  github:
+    owner: 7anX
+    name: AgentScan
+  draft: false
+  prerelease: auto
+  name_template: "{{ .Tag }}"
