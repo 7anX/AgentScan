@@ -1,6 +1,6 @@
 package output
 
-// WriteUnifiedHTMLReports writes a single report containing both MCP and A2A results.
+// WriteUnifiedHTMLReports writes a single report containing MCP, A2A, and LLM results.
 // Used by agentscan scan command. The report is written to the same directory as the
 // MCP-only reports. Returns (reportDir, error).
 
@@ -21,32 +21,56 @@ type unifiedReport struct {
 	GeneratedAt string
 	MCPSummary  JSONSummary
 	A2ASummary  A2AJSONSummary
+	LLMSummary  LLMJSONSummary
 	MCPServers  []htmlServer
 	A2AServers  []unifiedA2AServer
+	LLMServers  []unifiedLLMServer
 }
 
 type unifiedA2AServer struct {
-	Target          string
-	AgentName       string
-	CardURL         string
-	Profile         string
-	ExposureStatus  string
-	StatusClass     string
+	Target           string
+	AgentName        string
+	CardURL          string
+	Profile          string
+	ExposureStatus   string
+	StatusClass      string
 	FingerprintScore string
-	SkillCount      int
-	Skills          []models.A2ASkill
-	Interfaces      []models.A2AInterface
-	ExposureSignals string
-	DeclaredAuth    string
-	AuthReasons     []string
-	HasSkills       bool
+	SkillCount       int
+	Skills           []models.A2ASkill
+	Interfaces       []models.A2AInterface
+	ExposureSignals  string
+	DeclaredAuth     string
+	AuthReasons      []string
+	HasSkills        bool
+}
+
+type unifiedLLMServer struct {
+	Target             string
+	Framework          string
+	FrameworkVersion   string
+	AuthStatus         string
+	RiskLevel          string
+	StatusClass        string
+	FingerprintScore   string
+	ModelCount         int
+	Models             []models.LLMModel
+	MatchedEndpointCnt int
+	EvidenceEndpoints  []models.LLMEndpointEvidence
+	FingerprintSignals string
+	AuthReasons        string
+	NegativeSignals    string
+	TLSEnabled         bool
+	ResponseTimeMs     string
+	URL                string
+	HasEvidenceDetail  bool
 }
 
 // WriteUnifiedHTMLReports creates one report dir with report_zh.html and report_en.html,
-// each containing MCP and A2A results in a tabbed layout.
+// each containing MCP, A2A, and LLM results in a tabbed layout.
 func WriteUnifiedHTMLReports(
 	mcpResults []*models.MCPServer,
 	a2aResults []*models.A2AServer,
+	llmResults []*models.LLMServer,
 	baseDir string,
 	targets []string,
 	filePath string,
@@ -66,13 +90,13 @@ func WriteUnifiedHTMLReports(
 
 	for _, r := range reports {
 		path := filepath.Join(reportDir, r.name)
-		if err := writeUnifiedReport(path, mcpResults, a2aResults, r.lang); err != nil {
+		if err := writeUnifiedReport(path, mcpResults, a2aResults, llmResults, r.lang); err != nil {
 			return "", err
 		}
 	}
 
-	// summary.txt: combined MCP + A2A summary in one file
-	summary := buildUnifiedSummaryText(mcpResults, a2aResults)
+	// summary.txt: combined MCP + A2A + LLM summary in one file
+	summary := buildUnifiedSummaryText(mcpResults, a2aResults, llmResults)
 	if err := os.WriteFile(filepath.Join(reportDir, "summary.txt"), []byte(summary), 0644); err != nil {
 		return "", fmt.Errorf("write summary.txt: %w", err)
 	}
@@ -84,19 +108,25 @@ func WriteUnifiedHTMLReports(
 	if err := writeA2ATextReports(reportDir, a2aResults); err != nil {
 		return "", err
 	}
+	// LLM text reports (prefixed)
+	if err := writeLLMTextReports(reportDir, llmResults); err != nil {
+		return "", err
+	}
 
 	return reportDir, nil
 }
 
-func writeUnifiedReport(path string, mcpResults []*models.MCPServer, a2aResults []*models.A2AServer, lang reportLanguage) error {
+func writeUnifiedReport(path string, mcpResults []*models.MCPServer, a2aResults []*models.A2AServer, llmResults []*models.LLMServer, lang reportLanguage) error {
 	zh := lang.Code == "zh-CN"
 	data := unifiedReport{
 		Lang:        lang,
 		GeneratedAt: time.Now().Format("2006-01-02 15:04:05"),
 		MCPSummary:  summarizeResults(mcpResults),
 		A2ASummary:  summarizeA2AResults(a2aResults),
+		LLMSummary:  summarizeLLMResults(llmResults),
 		MCPServers:  buildHTMLServersLang(mcpResults, zh),
 		A2AServers:  buildUnifiedA2AServersLang(a2aResults, zh),
+		LLMServers:  buildUnifiedLLMServers(llmResults),
 	}
 
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
@@ -162,6 +192,70 @@ func buildUnifiedA2AServersLang(results []*models.A2AServer, zh bool) []unifiedA
 	return servers
 }
 
+func buildUnifiedLLMServers(results []*models.LLMServer) []unifiedLLMServer {
+	servers := make([]unifiedLLMServer, 0, len(results))
+	for _, r := range results {
+		statusClass := "pill status-neutral"
+		switch r.RiskLevel {
+		case "CRITICAL", "HIGH":
+			statusClass = "pill status-danger"
+		case "MEDIUM":
+			statusClass = "pill status-warning"
+		}
+		target := fmt.Sprintf("%s:%d", r.IP, r.Port)
+		if r.Hostname != "" && r.Hostname != r.IP {
+			target = fmt.Sprintf("%s:%d", r.Hostname, r.Port)
+		}
+
+		fpSignals := strings.Join(collectLLMFingerprintSignals(r), ", ")
+		authReasons := strings.Join(r.Evidence.AuthReasons, "; ")
+		negSignals := strings.Join(r.Evidence.NegativeSignals, ", ")
+		responseTime := ""
+		if r.ResponseTimeMs > 0 {
+			responseTime = fmt.Sprintf("%.0f ms", r.ResponseTimeMs)
+		}
+
+		servers = append(servers, unifiedLLMServer{
+			Target:             target,
+			Framework:          r.Framework,
+			FrameworkVersion:   r.FrameworkVersion,
+			AuthStatus:         r.AuthStatus,
+			RiskLevel:          r.RiskLevel,
+			StatusClass:        statusClass,
+			FingerprintScore:   fmt.Sprintf("%.2f", r.FingerprintScore),
+			ModelCount:         r.ModelCount,
+			Models:             r.Models,
+			MatchedEndpointCnt: len(r.Evidence.MatchedEndpoints),
+			EvidenceEndpoints:  r.Evidence.MatchedEndpoints,
+			FingerprintSignals: fpSignals,
+			AuthReasons:        authReasons,
+			NegativeSignals:    negSignals,
+			TLSEnabled:         r.TLSEnabled,
+			ResponseTimeMs:     responseTime,
+			URL:                r.URL,
+			HasEvidenceDetail:  len(r.Evidence.MatchedEndpoints) > 0 || fpSignals != "" || authReasons != "",
+		})
+	}
+	return servers
+}
+
+// collectLLMFingerprintSignals extracts matched signal names from endpoint evidence.
+func collectLLMFingerprintSignals(r *models.LLMServer) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, ep := range r.Evidence.MatchedEndpoints {
+		if !ep.Matched {
+			continue
+		}
+		key := ep.Path
+		if _, ok := seen[key]; !ok {
+			seen[key] = struct{}{}
+			out = append(out, ep.Path)
+		}
+	}
+	return out
+}
+
 // a2aIfaceStatusClass returns the pill CSS class for an A2A interface status.
 func a2aIfaceStatusClass(status models.A2AInterfaceStatus) string {
 	switch status {
@@ -182,9 +276,14 @@ func splitCommaSlice(s string) []string {
 	return strings.Split(s, ", ")
 }
 
+func addInts(a, b int) int {
+	return a + b
+}
+
 var tmplFuncs = template.FuncMap{
 	"a2aIfaceStatusClass": a2aIfaceStatusClass,
 	"splitComma":          splitCommaSlice,
+	"add":                 addInts,
 }
 
 // sharedCSS is the shared stylesheet used by all report variants.
@@ -307,6 +406,7 @@ const sharedCSS = `
     }
     .badge-mcp { background: #d1fae5; color: #065f46; }
     .badge-a2a { background: #dbeafe; color: #1e40af; }
+    .badge-llm { background: #fef3c7; color: #92400e; }
     @media (max-width: 800px) {
       header { padding: 22px 20px 18px; }
       .summary-grid { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
@@ -498,6 +598,90 @@ const a2aSectionHTML = `
     {{else}}<div class="empty">No A2A agents found.</div>{{end}}
 `
 
+const llmSectionHTML = `
+    {{if .LLMServers}}
+    <div class="table-wrap">
+      <table id="llm-table">
+        <thead>
+          <tr>
+            <th><button type="button" data-sort="target" data-type="text">{{.Lang.Target}}</button></th>
+            <th><button type="button" data-sort="framework" data-type="text">{{.Lang.LLMFramework}}</button></th>
+            <th><button type="button" data-sort="auth" data-type="text">{{.Lang.LLMAuthStatus}}</button></th>
+            <th><button type="button" data-sort="risk" data-type="text">{{.Lang.LLMRiskLevel}}</button></th>
+            <th><button type="button" data-sort="models" data-type="number">{{.Lang.LLMModels}}</button></th>
+            <th><button type="button" data-sort="score" data-type="number">{{.Lang.Score}}</button></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .LLMServers}}
+          <tr class="expandable-row" data-target="{{.Target}}" data-framework="{{.Framework}}" data-auth="{{.AuthStatus}}" data-risk="{{.RiskLevel}}" data-models="{{.ModelCount}}" data-score="{{.FingerprintScore}}">
+            <td><code>{{.Target}}</code></td>
+            <td>{{.Framework}}{{if .FrameworkVersion}} <span class="muted">{{.FrameworkVersion}}</span>{{end}}</td>
+            <td>{{.AuthStatus}}</td>
+            <td><span class="{{.StatusClass}}">{{.RiskLevel}}</span></td>
+            <td>{{.ModelCount}}</td>
+            <td>{{.FingerprintScore}}</td>
+          </tr>
+          <tr class="detail-row" style="display:none"><td colspan="6">
+            <div class="detail-body">
+              <div class="detail-grid">
+                <div class="kv"><span>{{$.Lang.LLMFramework}}</span><div>{{.Framework}}{{if .FrameworkVersion}} {{.FrameworkVersion}}{{end}}</div></div>
+                <div class="kv"><span>{{$.Lang.LLMAuthStatus}}</span><div>{{.AuthStatus}}</div></div>
+                <div class="kv"><span>{{$.Lang.LLMRiskLevel}}</span><div><span class="{{.StatusClass}}">{{.RiskLevel}}</span></div></div>
+                <div class="kv"><span>{{$.Lang.Score}}</span><div>{{.FingerprintScore}}</div></div>
+                {{if .URL}}<div class="kv"><span>URL</span><div><code>{{.URL}}</code></div></div>{{end}}
+                {{if .ResponseTimeMs}}<div class="kv"><span>{{$.Lang.LLMResponseTime}}</span><div>{{.ResponseTimeMs}}</div></div>{{end}}
+                <div class="kv"><span>{{$.Lang.LLMTLS}}</span><div>{{if .TLSEnabled}}{{$.Lang.LLMYes}}{{else}}{{$.Lang.LLMNo}}{{end}}</div></div>
+                <div class="kv"><span>{{$.Lang.LLMProbeEvidence}}</span><div>{{.MatchedEndpointCnt}}</div></div>
+              </div>
+              {{if .FingerprintSignals}}
+              <h3>{{$.Lang.FingerprintSignals}}</h3>
+              <div style="margin-bottom:10px">{{range (splitComma .FingerprintSignals)}}<span class="tag">{{.}}</span>{{end}}</div>
+              {{end}}
+              {{if .AuthReasons}}
+              <h3>{{$.Lang.AuthReasons}}</h3>
+              <p style="margin:4px 0;color:var(--muted);font-size:13px">{{.AuthReasons}}</p>
+              {{end}}
+              {{if .NegativeSignals}}
+              <h3>Negative Signals</h3>
+              <div style="margin-bottom:10px">{{range (splitComma .NegativeSignals)}}<span class="tag" style="background:#f9fafb;color:var(--muted)">{{.}}</span>{{end}}</div>
+              {{end}}
+              {{if .EvidenceEndpoints}}
+              <h3>{{$.Lang.LLMProbeEvidence}}</h3>
+              <table style="min-width:0;font-size:13px;margin-bottom:4px">
+                <thead><tr>
+                  <th style="padding:6px 10px">{{$.Lang.LLMMethod}}</th>
+                  <th style="padding:6px 10px">{{$.Lang.LLMPath}}</th>
+                  <th style="padding:6px 10px">{{$.Lang.LLMStatusCode}}</th>
+                  <th style="padding:6px 10px">{{$.Lang.LLMMatch}}</th>
+                  <th style="padding:6px 10px">{{$.Lang.LLMTime}}</th>
+                </tr></thead>
+                <tbody>
+                {{range .EvidenceEndpoints}}
+                <tr>
+                  <td style="padding:5px 10px"><code>{{.Method}}</code></td>
+                  <td style="padding:5px 10px"><code>{{.Path}}</code></td>
+                  <td style="padding:5px 10px">{{.StatusCode}}</td>
+                  <td style="padding:5px 10px">{{if .Matched}}<span class="pill status-danger" style="font-size:11px">✓</span>{{else}}<span class="muted">—</span>{{end}}</td>
+                  <td style="padding:5px 10px;color:var(--muted)">{{printf "%.0f" .ResponseMs}}ms</td>
+                </tr>
+                {{end}}
+                </tbody>
+              </table>
+              {{end}}
+              {{if .Models}}
+              <h3>{{$.Lang.LLMModels}} ({{.ModelCount}})</h3>
+              <ul>{{range .Models}}<li><code>{{.ID}}</code>{{if .OwnedBy}} <span class="muted">{{.OwnedBy}}</span>{{end}}</li>{{end}}</ul>
+              {{end}}
+            </div>
+          </td></tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}<div class="empty">No LLM APIs found.</div>{{end}}
+`
+
 var unifiedTemplate = template.Must(template.New("unified").Funcs(tmplFuncs).Parse(`<!doctype html>
 <html lang="{{.Lang.Code}}">
 <head>
@@ -535,6 +719,16 @@ var unifiedTemplate = template.Must(template.New("unified").Funcs(tmplFuncs).Par
         <div class="card"><div class="metric">Disabled</div><div class="value">{{.A2ASummary.EndpointDisabled}}</div></div>
         <div class="card"><div class="metric">Skills</div><div class="value">{{.A2ASummary.TotalSkills}}</div></div>
       </div>
+      <div style="margin:16px 0 6px;font-size:13px;font-weight:600;color:var(--muted)">
+        <span class="protocol-badge badge-llm">LLM</span>
+      </div>
+      <div class="summary-grid">
+        <div class="card"><div class="metric">APIs</div><div class="value">{{.LLMSummary.Total}}</div></div>
+        <div class="card"><div class="metric">{{.Lang.LLMOpen}}</div><div class="value">{{.LLMSummary.Open}}</div></div>
+        <div class="card"><div class="metric">{{.Lang.AuthRequired}}</div><div class="value">{{.LLMSummary.AuthRequired}}</div></div>
+        <div class="card"><div class="metric">{{.Lang.LLMHighCritical}}</div><div class="value">{{add .LLMSummary.High .LLMSummary.Critical}}</div></div>
+        <div class="card"><div class="metric">{{.Lang.LLMModels}}</div><div class="value">{{.LLMSummary.TotalModels}}</div></div>
+      </div>
     </section>
 
     <section>
@@ -545,6 +739,9 @@ var unifiedTemplate = template.Must(template.New("unified").Funcs(tmplFuncs).Par
         <button class="tab-btn" data-tab="tab-a2a">
           <span class="protocol-badge badge-a2a">A2A</span> Agents ({{len .A2AServers}})
         </button>
+        <button class="tab-btn" data-tab="tab-llm">
+          <span class="protocol-badge badge-llm">LLM</span> APIs ({{len .LLMServers}})
+        </button>
       </div>
 
       <div id="tab-mcp" class="tab-panel active">
@@ -553,6 +750,10 @@ var unifiedTemplate = template.Must(template.New("unified").Funcs(tmplFuncs).Par
 
       <div id="tab-a2a" class="tab-panel">
 ` + a2aSectionHTML + `
+      </div>
+
+      <div id="tab-llm" class="tab-panel">
+` + llmSectionHTML + `
       </div>
     </section>
   </main>
@@ -595,9 +796,44 @@ var standaloneA2ATemplate = template.Must(template.New("a2a-standalone").Funcs(t
 </body>
 </html>`))
 
-func buildUnifiedSummaryText(mcpResults []*models.MCPServer, a2aResults []*models.A2AServer) string {
+var standaloneLLMTemplate = template.Must(template.New("llm-standalone").Funcs(tmplFuncs).Parse(`<!doctype html>
+<html lang="{{.Lang.Code}}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentScan LLM - {{.Lang.Title}}</title>
+  <style>` + sharedCSS + `</style>
+</head>
+<body>
+  <header>
+    <h1><span class="protocol-badge badge-llm" style="font-size:18px">LLM</span> {{.Lang.Title}}</h1>
+    <div class="subtitle">{{.Lang.Subtitle}}</div>
+    <div class="muted">{{.Lang.Generated}}: {{.GeneratedAt}}</div>
+  </header>
+  <main>
+    <section>
+      <h2>{{.Lang.Summary}}</h2>
+      <div class="summary-grid">
+        <div class="card"><div class="metric">APIs</div><div class="value">{{.LLMSummary.Total}}</div></div>
+        <div class="card"><div class="metric">{{.Lang.LLMOpen}}</div><div class="value">{{.LLMSummary.Open}}</div></div>
+        <div class="card"><div class="metric">{{.Lang.AuthRequired}}</div><div class="value">{{.LLMSummary.AuthRequired}}</div></div>
+        <div class="card"><div class="metric">{{.Lang.LLMHighCritical}}</div><div class="value">{{add .LLMSummary.High .LLMSummary.Critical}}</div></div>
+        <div class="card"><div class="metric">{{.Lang.LLMModels}}</div><div class="value">{{.LLMSummary.TotalModels}}</div></div>
+      </div>
+    </section>
+    <section>
+      <h2>{{.Lang.Results}}</h2>
+` + llmSectionHTML + `
+    </section>
+  </main>
+  <script>` + tableSortJS + `</script>
+</body>
+</html>`))
+
+func buildUnifiedSummaryText(mcpResults []*models.MCPServer, a2aResults []*models.A2AServer, llmResults []*models.LLMServer) string {
 	mcp := summarizeResults(mcpResults)
 	a2a := summarizeA2AResults(a2aResults)
+	llm := summarizeLLMResults(llmResults)
 	var b strings.Builder
 	fmt.Fprintf(&b, "AgentScan unified summary\n")
 	fmt.Fprintf(&b, "Generated: %s\n\n", time.Now().Format("2006-01-02 15:04:05"))
@@ -615,6 +851,14 @@ func buildUnifiedSummaryText(mcpResults []*models.MCPServer, a2aResults []*model
 	fmt.Fprintf(&b, "Auth required: %d\n", a2a.AuthRequired)
 	fmt.Fprintf(&b, "Disabled:      %d\n", a2a.EndpointDisabled)
 	fmt.Fprintf(&b, "Private host:  %d\n", a2a.PrivateHostAdvertised)
-	fmt.Fprintf(&b, "Skills:        %d\n", a2a.TotalSkills)
+	fmt.Fprintf(&b, "Skills:        %d\n\n", a2a.TotalSkills)
+	fmt.Fprintf(&b, "[LLM]\n")
+	fmt.Fprintf(&b, "Total:         %d\n", llm.Total)
+	fmt.Fprintf(&b, "Open:          %d\n", llm.Open)
+	fmt.Fprintf(&b, "Auth required: %d\n", llm.AuthRequired)
+	fmt.Fprintf(&b, "Critical:      %d\n", llm.Critical)
+	fmt.Fprintf(&b, "High:          %d\n", llm.High)
+	fmt.Fprintf(&b, "Medium:        %d\n", llm.Medium)
+	fmt.Fprintf(&b, "Models:        %d\n", llm.TotalModels)
 	return b.String()
 }

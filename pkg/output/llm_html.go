@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/agentscan/agentscan/pkg/models"
 )
@@ -21,6 +22,20 @@ func WriteLLMHTMLReports(results []*models.LLMServer, baseDir string, targets []
 		return "", err
 	}
 
+	reports := []struct {
+		name string
+		lang reportLanguage
+	}{
+		{name: "report.html", lang: zhReportLanguage()},
+		{name: "report_en.html", lang: enReportLanguage()},
+	}
+	for _, r := range reports {
+		path := filepath.Join(reportDir, r.name)
+		if err := writeLLMStandaloneReport(path, results, r.lang); err != nil {
+			return "", err
+		}
+	}
+
 	// Write text reports
 	if err := writeLLMTextReports(reportDir, results); err != nil {
 		return "", err
@@ -33,6 +48,26 @@ func WriteLLMHTMLReports(results []*models.LLMServer, baseDir string, targets []
 	}
 
 	return reportDir, nil
+}
+
+func writeLLMStandaloneReport(path string, results []*models.LLMServer, lang reportLanguage) error {
+	data := unifiedReport{
+		Lang:        lang,
+		GeneratedAt: time.Now().Format("2006-01-02 15:04:05"),
+		LLMSummary:  summarizeLLMResults(results),
+		LLMServers:  buildUnifiedLLMServers(results),
+	}
+
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return fmt.Errorf("create LLM HTML report: %w", err)
+	}
+	defer f.Close()
+
+	if err := standaloneLLMTemplate.Execute(f, data); err != nil {
+		return fmt.Errorf("render LLM HTML report: %w", err)
+	}
+	return nil
 }
 
 // writeLLMTextReports generates all LLM text report files.
@@ -59,8 +94,8 @@ func writeLLMTextReports(reportDir string, results []*models.LLMServer) error {
 
 func buildLLMFindingsText(results []*models.LLMServer, filter func(*models.LLMServer) bool) string {
 	var b strings.Builder
-	b.WriteString("# AgentScan LLM Findings\n")
-	b.WriteString("# URL\tFramework\tVersion\tAuth\tRisk\tModels\n\n")
+	b.WriteString("# AgentScan LLM 扫描发现\n")
+	b.WriteString("# URL\t框架\t版本\t认证\t风险\t模型数\n\n")
 	for _, r := range results {
 		if filter != nil && !filter(r) {
 			continue
@@ -73,8 +108,8 @@ func buildLLMFindingsText(results []*models.LLMServer, filter func(*models.LLMSe
 
 func buildLLMModelsText(results []*models.LLMServer) string {
 	var b strings.Builder
-	b.WriteString("# AgentScan LLM Models\n")
-	b.WriteString("# URL\tFramework\tModelID\n\n")
+	b.WriteString("# AgentScan LLM 暴露模型列表\n")
+	b.WriteString("# URL\t框架\t模型ID\n\n")
 	for _, r := range results {
 		for _, m := range r.Models {
 			fmt.Fprintf(&b, "%s\t%s\t%s\n", r.URL, r.Framework, m.ID)
@@ -85,7 +120,7 @@ func buildLLMModelsText(results []*models.LLMServer) string {
 
 func buildLLMEvidenceText(results []*models.LLMServer) string {
 	var b strings.Builder
-	b.WriteString("# AgentScan LLM Evidence\n\n")
+	b.WriteString("# AgentScan LLM 探测证据\n\n")
 	for _, r := range results {
 		fmt.Fprintf(&b, "## %s (%s)\n", r.URL, r.Framework)
 		for _, ep := range r.Evidence.MatchedEndpoints {
@@ -93,14 +128,12 @@ func buildLLMEvidenceText(results []*models.LLMServer) string {
 			if ep.Matched {
 				matched = "✓"
 			}
+			matchLabel := ""
+			if ep.Matched {
+				matchLabel = "命中"
+			}
 			fmt.Fprintf(&b, "  %s %s %s → %d (%.0fms) %s\n",
-				matched, ep.Method, ep.Path, ep.StatusCode, ep.ResponseMs,
-				func() string {
-					if ep.Matched {
-						return "MATCHED"
-					}
-					return ""
-				}())
+				matched, ep.Method, ep.Path, ep.StatusCode, ep.ResponseMs, matchLabel)
 		}
 		b.WriteString("\n")
 	}
@@ -110,15 +143,15 @@ func buildLLMEvidenceText(results []*models.LLMServer) string {
 func buildLLMSummaryText(results []*models.LLMServer) string {
 	summary := summarizeLLMResults(results)
 	var b strings.Builder
-	b.WriteString("AgentScan LLM Scan Summary\n")
+	b.WriteString("AgentScan LLM 扫描摘要\n")
 	b.WriteString("==========================\n\n")
-	fmt.Fprintf(&b, "Total findings:    %d\n", summary.Total)
-	fmt.Fprintf(&b, "Open (no auth):    %d\n", summary.Open)
-	fmt.Fprintf(&b, "Auth required:     %d\n", summary.AuthRequired)
-	fmt.Fprintf(&b, "Critical risk:     %d\n", summary.Critical)
-	fmt.Fprintf(&b, "High risk:         %d\n", summary.High)
-	fmt.Fprintf(&b, "Medium risk:       %d\n", summary.Medium)
-	fmt.Fprintf(&b, "Total models:      %d\n", summary.TotalModels)
+	fmt.Fprintf(&b, "发现总数:      %d\n", summary.Total)
+	fmt.Fprintf(&b, "开放(无认证):  %d\n", summary.Open)
+	fmt.Fprintf(&b, "需要认证:      %d\n", summary.AuthRequired)
+	fmt.Fprintf(&b, "严重风险:      %d\n", summary.Critical)
+	fmt.Fprintf(&b, "高危风险:      %d\n", summary.High)
+	fmt.Fprintf(&b, "中危风险:      %d\n", summary.Medium)
+	fmt.Fprintf(&b, "暴露模型:      %d\n", summary.TotalModels)
 	return b.String()
 }
 

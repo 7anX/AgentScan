@@ -56,6 +56,25 @@ type reportLanguage struct {
 	FingerprintSignals   string
 	AuthReasons          string
 	None                 string
+
+	// ── LLM 专用 ──
+	LLMFramework     string
+	LLMAuthStatus    string
+	LLMRiskLevel     string
+	LLMModels        string
+	LLMVersion       string
+	LLMResponseTime  string
+	LLMTLS           string
+	LLMProbeEvidence string
+	LLMOpen          string
+	LLMHighCritical  string
+	LLMYes           string
+	LLMNo            string
+	LLMMethod        string
+	LLMPath          string
+	LLMStatusCode    string
+	LLMMatch         string
+	LLMTime          string
 }
 
 type htmlServer struct {
@@ -566,6 +585,24 @@ func zhReportLanguage() reportLanguage {
 		FingerprintSignals:   "指纹",
 		AuthReasons:          "认证原因",
 		None:                 "无",
+
+		LLMFramework:     "推理框架",
+		LLMAuthStatus:    "认证状态",
+		LLMRiskLevel:     "风险等级",
+		LLMModels:        "模型数",
+		LLMVersion:       "版本",
+		LLMResponseTime:  "响应时间",
+		LLMTLS:           "TLS",
+		LLMProbeEvidence: "探测证据",
+		LLMOpen:          "开放",
+		LLMHighCritical:  "高危/严重",
+		LLMYes:           "是",
+		LLMNo:            "否",
+		LLMMethod:        "方法",
+		LLMPath:          "路径",
+		LLMStatusCode:    "状态码",
+		LLMMatch:         "匹配",
+		LLMTime:          "耗时",
 	}
 }
 
@@ -607,6 +644,24 @@ func enReportLanguage() reportLanguage {
 		FingerprintSignals:   "Fingerprint",
 		AuthReasons:          "Auth reasons",
 		None:                 "None",
+
+		LLMFramework:     "Framework",
+		LLMAuthStatus:    "Auth Status",
+		LLMRiskLevel:     "Risk Level",
+		LLMModels:        "Models",
+		LLMVersion:       "Version",
+		LLMResponseTime:  "Response Time",
+		LLMTLS:           "TLS",
+		LLMProbeEvidence: "Probe Evidence",
+		LLMOpen:          "Open",
+		LLMHighCritical:  "High/Critical",
+		LLMYes:           "Yes",
+		LLMNo:            "No",
+		LLMMethod:        "Method",
+		LLMPath:          "Path",
+		LLMStatusCode:    "Status",
+		LLMMatch:         "Match",
+		LLMTime:          "Time",
 	}
 }
 
