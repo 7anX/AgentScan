@@ -9,4 +9,3 @@ linters:
     - govet
     - staticcheck
     - ineffassign
-    - gosimple
