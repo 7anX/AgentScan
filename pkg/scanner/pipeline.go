@@ -19,14 +19,15 @@ import (
 
 // Pipeline 完整扫描流水线
 type Pipeline struct {
-	cfg     models.ScanConfig
-	noColor bool
-	onFound func(*models.MCPServer) // 实时回调
+	cfg          models.ScanConfig
+	noColor      bool
+	probeLabel   string // printed as "[N/N] <probeLabel> probe" in RunFromCandidates
+	onFound      func(*models.MCPServer) // 实时回调
 }
 
 // NewPipeline 创建流水线
 func NewPipeline(cfg models.ScanConfig, noColor bool, onFound func(*models.MCPServer)) *Pipeline {
-	return &Pipeline{cfg: cfg, noColor: noColor, onFound: onFound}
+	return &Pipeline{cfg: cfg, noColor: noColor, probeLabel: "[3/3] mcp probe   ", onFound: onFound}
 }
 
 func progressPercent(done, total int64) int {
@@ -102,10 +103,20 @@ func printSlowTargets(items []slowTarget) {
 
 // Run 执行完整扫描，返回所有结果（按风险分从高到低排序）
 func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.MCPServer {
+	candidates := p.scanToHTTPCandidates(ctx, targets)
+	if candidates == nil {
+		return nil
+	}
+	return p.RunFromCandidates(ctx, candidates)
+}
+
+// scanToHTTPCandidates runs stage 1 (port scan) and stage 2 (HTTP filter).
+// Returns nil when no candidates are found (already prints the reason to stderr).
+func (p *Pipeline) scanToHTTPCandidates(ctx context.Context, targets []target.Target) []HTTPCandidate {
 	// Stage 1: 端口扫描（--skip-port-scan 时跳过，所有输入视为已开放）
 	var portResults []PortResult
 	if p.cfg.SkipPortScan {
-		fmt.Fprintf(os.Stderr, "[1/3] port scan    SKIPPED (--skip-port-scan)\n\n")
+		fmt.Fprintf(os.Stderr, "[1/2] port scan    SKIPPED (--skip-port-scan)\n\n")
 		portResults = make([]PortResult, 0, len(targets))
 		for _, t := range targets {
 			portResults = append(portResults, PortResult{
@@ -122,21 +133,33 @@ func (p *Pipeline) Run(ctx context.Context, targets []target.Target) []*models.M
 	}
 
 	// Stage 2: HTTP 筛选
-	fmt.Fprintf(os.Stderr, "[2/3] http filter  %d ports\n", len(portResults))
-	candidates := FilterHTTP(ctx, portResults, p.cfg.TimeoutHTTPMs)
+	fmt.Fprintf(os.Stderr, "[2/2] http filter  %d ports\n", len(portResults))
+	candidates := FilterHTTP(ctx, portResults, p.cfg.TimeoutHTTPMs, p.cfg.Concurrency, p.cfg.Dict)
 	if len(candidates) == 0 {
 		fmt.Fprintf(os.Stderr, "      no HTTP services found\n\n")
 		return nil
 	}
 	fmt.Fprintf(os.Stderr, "      %d candidates\n\n", len(candidates))
+	return candidates
+}
 
+// RunFromCandidates runs MCP probes against already-filtered HTTP candidates.
+// Used by agentscan scan to share port scan and HTTP filter results with A2A.
+func (p *Pipeline) RunFromCandidates(ctx context.Context, candidates []HTTPCandidate) []*models.MCPServer {
+	if len(candidates) == 0 {
+		return nil
+	}
 	total := int64(len(candidates))
 	var done atomic.Int64
 	var displayMu sync.Mutex
 
 	stopProgress := make(chan struct{})
 	var progressWG sync.WaitGroup
-	fmt.Fprintf(os.Stderr, "[3/3] mcp probe    %d candidates\n", len(candidates))
+	label := p.probeLabel
+	if label == "" {
+		label = "[3/3] mcp probe   "
+	}
+	fmt.Fprintf(os.Stderr, "%s %d candidates\n", label, len(candidates))
 	progressWG.Add(1)
 	go func() {
 		defer progressWG.Done()
@@ -245,7 +268,7 @@ done:
 
 // analyzeCandidate 对单个候选目标完整分析（只做 MCP 存活识别，不做风险评估）
 func (p *Pipeline) analyzeCandidate(ctx context.Context, c HTTPCandidate) *models.MCPServer {
-	probe := ProbeMCPWithHostname(ctx, c.BaseURL, c.Hostname, c.URLPath, p.cfg.TimeoutMCPMs)
+	probe := ProbeMCPWithHostname(ctx, c.BaseURL, c.Hostname, c.URLPath, p.cfg.TimeoutMCPMs, p.cfg.Dict)
 	if probe == nil || probe.FingerprintScore < 0.35 {
 		return nil
 	}
@@ -310,11 +333,8 @@ func (p *Pipeline) analyzeCandidate(ctx context.Context, c HTTPCandidate) *model
 		// SSE legacy：单次 session 枚举四类，避免四次独立握手
 		tools, resources, resourceTemplates, prompts = EnumerateAllSSELegacy(ctx, c.BaseURL, probe.Endpoint, c.Hostname, p.cfg.TimeoutMCPMs)
 	} else {
-		// Streamable HTTP：四个独立请求复用同一 session（sessionID 传入）
-		tools = EnumerateTools(ctx, c.BaseURL, probe.Endpoint, probe.MessagePath, probe.SessionID, c.Hostname, p.cfg.TimeoutMCPMs)
-		resources = EnumerateResources(ctx, c.BaseURL, probe.Endpoint, probe.MessagePath, probe.SessionID, c.Hostname, p.cfg.TimeoutMCPMs)
-		resourceTemplates = EnumerateResourceTemplates(ctx, c.BaseURL, probe.Endpoint, probe.MessagePath, probe.SessionID, c.Hostname, p.cfg.TimeoutMCPMs)
-		prompts = EnumeratePrompts(ctx, c.BaseURL, probe.Endpoint, probe.MessagePath, probe.SessionID, c.Hostname, p.cfg.TimeoutMCPMs)
+		// Streamable HTTP：共享 client，四路并行枚举
+		tools, resources, resourceTemplates, prompts = EnumerateAllStreamable(ctx, c.BaseURL, probe.Endpoint, probe.MessagePath, probe.SessionID, c.Hostname, p.cfg.TimeoutMCPMs)
 	}
 
 	server.Tools = tools
@@ -417,8 +437,13 @@ func RunScan(ctx context.Context, rawTargets []string, filePath string,
 		}
 	}
 
-	pipeline := NewPipeline(cfg, noColor, onFound)
-	results := pipeline.Run(ctx, targets)
+	// Stage 1+2: port scan and HTTP filter — shared with A2A
+	mcpPipeline := NewPipeline(cfg, noColor, onFound)
+	mcpPipeline.probeLabel = "--- MCP probe    "
+	candidates := mcpPipeline.scanToHTTPCandidates(ctx, targets)
+
+	// MCP probe (stage 3)
+	results := mcpPipeline.RunFromCandidates(ctx, candidates)
 
 	// 打印摘要
 	if format == "terminal" || format == "" {
@@ -435,8 +460,42 @@ func RunScan(ctx context.Context, rawTargets []string, filePath string,
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "report     generating html/txt files...\n")
-	reportDir, err := output.WriteHTMLReports(results, htmlReportBaseDir(outputPath), rawTargets, filePath)
+	// A2A probe — reuse the same HTTP candidates, no repeat port scan or HTTP filter
+	var a2aResults []*models.A2AServer
+	if len(candidates) > 0 {
+		fmt.Fprintf(os.Stderr, "\n--- A2A scan ---\n")
+		a2aOutputPath := ""
+		if outputPath != "" {
+			a2aOutputPath = strings.TrimSuffix(outputPath, filepath.Ext(outputPath)) + "_a2a.json"
+		}
+		// A2A probe = card fetch + 1-2 JSON-RPC calls; cap timeout at 4x connect timeout
+		a2aCfg := cfg
+		if a2aCfg.TimeoutMCPMs > a2aCfg.TimeoutConnectMs*4 {
+			a2aCfg.TimeoutMCPMs = a2aCfg.TimeoutConnectMs * 4
+		}
+		var a2aOnFound func(*models.A2AServer)
+		if format == "terminal" || format == "" {
+			a2aOnFound = func(s *models.A2AServer) {
+				output.PrintA2AServer(s, noColor)
+			}
+		}
+		a2aPipeline := NewA2APipeline(a2aCfg, noColor, false, a2aOnFound)
+		a2aPipeline.probeLabel = "--- A2A probe    "
+		a2aResults = a2aPipeline.RunFromCandidates(ctx, candidates)
+		if format == "terminal" || format == "" {
+			output.PrintA2ASummary(a2aResults, noColor)
+		}
+		if a2aOutputPath != "" {
+			if err := output.WriteA2AJSON(a2aResults, a2aOutputPath); err != nil {
+				return results, fmt.Errorf("write A2A JSON: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "[*] A2A results written to: %s\n", a2aOutputPath)
+		}
+	}
+
+	// Single unified report containing both MCP and A2A results
+	fmt.Fprintf(os.Stderr, "report     generating unified html/txt files...\n")
+	reportDir, err := output.WriteUnifiedHTMLReports(results, a2aResults, htmlReportBaseDir(outputPath), rawTargets, filePath)
 	if err != nil {
 		return results, fmt.Errorf("write HTML report: %w", err)
 	}

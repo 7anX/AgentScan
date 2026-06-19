@@ -91,15 +91,19 @@ type ProbeResult struct {
 // ProbeMCP 对单个 base URL 尝试识别 MCP 服务
 // hostname 用于 HTTPS SNI，为空时从 baseURL 中提取
 func ProbeMCP(ctx context.Context, baseURL string, timeoutMs int) *ProbeResult {
-	return ProbeMCPWithHostname(ctx, baseURL, "", "", timeoutMs)
+	return ProbeMCPWithHostname(ctx, baseURL, "", "", timeoutMs, nil)
 }
 
 // ProbeMCPWithHostname 支持指定 hostname（SNI）和 urlPath（优先端点）的 MCP 探测
-func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string, timeoutMs int) *ProbeResult {
+// dict 为字典集合；传 nil 时使用 config.DefaultDictSet()。
+func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string, timeoutMs int, dict *config.DictSet) *ProbeResult {
+	if dict == nil {
+		dict = config.DefaultDictSet()
+	}
 	timeout := time.Duration(timeoutMs) * time.Millisecond
 	client := buildHTTPClient(hostname, timeout)
 
-	endpoints := buildProbeEndpoints(urlPath)
+	endpoints := buildProbeEndpoints(urlPath, dict)
 
 	// 并行探测所有端点，找到第一个无认证命中立即返回
 	// 使用可取消的 context：一旦找到结果，取消所有其他 goroutine
@@ -120,7 +124,7 @@ func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string
 			defer wg.Done()
 			url := baseURL + ep
 
-			r := tryStreamableHTTP(probeCtx, client, url, ep)
+			r := tryStreamableHTTP(probeCtx, client, url, ep, dict.MCPAuthPaths)
 			if r != nil {
 				r.Endpoint = ep
 				resultCh <- result{r, priority}
@@ -132,7 +136,7 @@ func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string
 			// 2. 路径以 /sse 或 /sse/ 结尾（兼容自定义前缀，如 /9da4ht4y/sse）
 			// 3. 以上都不满足时，做一次轻量 GET 探测：若响应 Content-Type 是
 			//    text/event-stream，则这是一个 SSE endpoint（路径名不含 "sse" 也能识别）
-			isSSEPath := config.SSELegacyPaths[ep] ||
+			isSSEPath := dict.SSELegacyPaths[ep] ||
 				strings.HasSuffix(ep, "/sse") ||
 				strings.HasSuffix(ep, "/sse/")
 			if !isSSEPath {
@@ -199,13 +203,16 @@ func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string
 	return bestAuthRequired
 }
 
-func buildProbeEndpoints(urlPath string) []string {
+func buildProbeEndpoints(urlPath string, dict *config.DictSet) []string {
+	if dict == nil {
+		dict = config.DefaultDictSet()
+	}
 	if urlPath == "" || urlPath == "/" {
-		return config.MCPEndpoints
+		return dict.MCPEndpoints
 	}
 
-	seen := make(map[string]struct{}, len(config.MCPEndpoints)*2)
-	endpoints := make([]string, 0, len(config.MCPEndpoints)*2)
+	seen := make(map[string]struct{}, len(dict.MCPEndpoints)*2)
+	endpoints := make([]string, 0, len(dict.MCPEndpoints)*2)
 	add := func(ep string) {
 		ep = normalizeProbeEndpoint(ep)
 		if ep == "" {
@@ -223,7 +230,7 @@ func buildProbeEndpoints(urlPath string) []string {
 
 	if shouldExpandMountPrefix(urlPath) {
 		prefix := strings.TrimRight(normalized, "/")
-		for _, ep := range config.MCPEndpoints {
+		for _, ep := range dict.MCPEndpoints {
 			if ep == "/" {
 				add(prefix)
 				continue
@@ -232,7 +239,7 @@ func buildProbeEndpoints(urlPath string) []string {
 		}
 	}
 
-	for _, ep := range config.MCPEndpoints {
+	for _, ep := range dict.MCPEndpoints {
 		add(ep)
 	}
 	return endpoints
@@ -298,7 +305,7 @@ func sseProbeSessionTimeout(timeout time.Duration) time.Duration {
 }
 
 // endpoint 参数用于辅助 auth-required 判断（/mcp、/sse 等 MCP 特征路径名）
-func tryStreamableHTTP(ctx context.Context, client *http.Client, url, endpoint string) *ProbeResult {
+func tryStreamableHTTP(ctx context.Context, client *http.Client, url, endpoint string, authPaths map[string]bool) *ProbeResult {
 	// 单个端点探测最多等 3 秒，避免 20 个端点串行时总超时爆炸
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -327,7 +334,7 @@ func tryStreamableHTTP(ctx context.Context, client *http.Client, url, endpoint s
 		// 1. 状态码明确表示认证失败（401/403），或 400 且带 WWW-Authenticate
 		// 2. 响应体包含 "jsonrpc" 字段（JSON-RPC 协议特征）
 		// 3. 响应体包含 "error" 字段，或响应头有 MCP-Session-Id / MCP-Protocol-Version
-		authRequired, authEvidence := isMCPAuthRequiredWithEvidence(resp, endpoint)
+		authRequired, authEvidence := isMCPAuthRequiredWithEvidence(resp, endpoint, authPaths)
 		if authRequired {
 			return &ProbeResult{
 				Transport:        models.TransportStreamableHTTP,
@@ -744,7 +751,7 @@ func summarizeJSONRPC(method string, statusCode int, contentType string, data ma
 }
 
 // isMCPAuthRequiredWithEvidence explains whether a 4xx response is an MCP auth challenge.
-func isMCPAuthRequiredWithEvidence(resp *http.Response, endpoint string) (bool, models.AuthEvidence) {
+func isMCPAuthRequiredWithEvidence(resp *http.Response, endpoint string, authPaths map[string]bool) (bool, models.AuthEvidence) {
 	evidence := models.AuthEvidence{Status: "unknown"}
 	switch resp.StatusCode {
 	case 406:
@@ -770,7 +777,7 @@ func isMCPAuthRequiredWithEvidence(resp *http.Response, endpoint string) (bool, 
 		score++
 		evidence.Reasons = append(evidence.Reasons, fmt.Sprintf("HTTP %d auth challenge", code))
 	}
-	if config.MCPAuthPaths[endpoint] {
+	if authPaths[endpoint] {
 		score++
 		evidence.Reasons = append(evidence.Reasons, "known MCP endpoint path")
 	}

@@ -1,0 +1,39 @@
+# MCP 端点路径字典
+# 探测顺序即优先级：T0 > T1 > T2 > T3
+# 格式：每行一个路径，# 开头为注释
+
+# T0 - 核心（官方规范 / SDK 默认，覆盖 99% 标准部署）
+/mcp
+/sse
+/messages/
+/messages
+/message
+/
+
+# T1 - 框架挂载 / 大型生态
+/gradio_api/mcp
+/gradio_api/mcp/
+/mcp/sse
+/mcp/messages
+/mcp/message
+/api/mcp
+/api/mcp/sse
+/api/v1/mcp
+/api/v1/mcp/sse
+/mcp-server
+/mcp-server/sse
+/agent/mcp
+
+# T2 - 版本化 / 尾斜杠变体
+/mcp/
+/sse/
+/v1/mcp
+/mcp/v1
+/mcp/messages/
+/mcp/v1/messages
+
+# T3 - 服务发现 / 健康检查
+/.well-known/mcp/server-card.json
+/.well-known/mcp
+/.well-known/mcp.json
+/mcp/health

@@ -134,26 +134,50 @@ type MCPServer struct {
 
 // ScanConfig 扫描配置
 type ScanConfig struct {
+	// Ports 是本次扫描实际使用的端口列表（"最终值"）。
+	// 初始化顺序：DefaultConfig/DefaultA2AConfig 从 Dict 设置协议对应默认端口；
+	// 若用户显式传 --ports，main.go 会再用 parsePorts() 覆盖此字段。
+	// 流水线只读此字段做端口扫描，不再读 Dict.MCPPorts / Dict.A2APorts。
+	//
+	// Dict 是字典模板，用于 HTTP 过滤阶段（HTTPSPorts 推断、MCPServerHints 匹配、
+	// 路径探测列表等），与 Ports 语义不同，不应混用。
 	Ports            []int
 	Concurrency      int
 	TimeoutConnectMs int
 	TimeoutHTTPMs    int
 	TimeoutMCPMs     int
-	MCPConcurrency   int  // MCP 探测并发数（默认 50，可通过 --mcp-threads 调整）
+	MCPConcurrency   int  // MCP/A2A 探测并发数（默认 50，可通过 --mcp-threads/--a2a-threads 调整）
 	SkipPortScan     bool // 跳过 TCP 端口扫描，适用于输入已知 IP:Port 列表的场景
 	ExcludeHoneypots bool
 	VerboseRaw       bool
-	Verbose          bool // 详细日志：打印每个开放端口、每个MCP探测过程、耗时
+	Verbose          bool            // 详细日志：打印每个开放端口、每个探测过程、耗时
+	Dict             *config.DictSet // 解耦字典集合；nil 时各模块应调用 config.DefaultDictSet()
 }
 
-// DefaultConfig 默认配置（数值来自 pkg/config/config.go，统一在那里修改）
+// DefaultConfig MCP 扫描默认配置（数值来自 pkg/config/config.go，统一在那里修改）
 func DefaultConfig() ScanConfig {
+	ds := config.DefaultDictSet()
 	return ScanConfig{
-		Ports:            config.DefaultPorts,
+		Ports:            ds.MCPPorts,
 		Concurrency:      config.DefaultConcurrency,
 		TimeoutConnectMs: config.DefaultTimeoutConnectMs,
 		TimeoutHTTPMs:    config.DefaultTimeoutConnectMs * 10,
 		TimeoutMCPMs:     config.DefaultTimeoutConnectMs * 20,
 		MCPConcurrency:   50,
+		Dict:             ds,
+	}
+}
+
+// DefaultA2AConfig A2A 扫描默认配置
+func DefaultA2AConfig() ScanConfig {
+	ds := config.DefaultDictSet()
+	return ScanConfig{
+		Ports:            ds.A2APorts,
+		Concurrency:      config.DefaultConcurrency,
+		TimeoutConnectMs: config.DefaultTimeoutConnectMs,
+		TimeoutHTTPMs:    config.DefaultTimeoutConnectMs * 10,
+		TimeoutMCPMs:     config.DefaultTimeoutConnectMs * 20,
+		MCPConcurrency:   50,
+		Dict:             ds,
 	}
 }

@@ -25,17 +25,19 @@ type HTTPCandidate struct {
 	Priority    int
 }
 
-// MCP 相关的 Server 头特征（来自 Bitsight 报告）
-// 字典维护见 pkg/config/config.go → MCPServerHints
-var mcpServerHints = config.MCPServerHints
-
 // FilterHTTP 对开放端口做并发 HTTP 筛选，返回候选列表。
 // 全部纳入（高召回率），命中 MCP 特征的标记高优先级。
-func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int) []HTTPCandidate {
+// dict 为字典集合；传 nil 时使用 config.DefaultDictSet()。
+func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int, concurrency int, dict *config.DictSet) []HTTPCandidate {
+	if dict == nil {
+		dict = config.DefaultDictSet()
+	}
 	timeout := time.Duration(timeoutMs) * time.Millisecond
 
-	// 并发执行
-	sem := make(chan struct{}, 100)
+	if concurrency <= 0 {
+		concurrency = 100
+	}
+	sem := make(chan struct{}, concurrency)
 	var mu sync.Mutex
 	var candidates []HTTPCandidate
 	var wg sync.WaitGroup
@@ -57,7 +59,7 @@ func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int) []HTTPCa
 			// 协议优先级：用户指定 > 端口推断
 			proto := p.Proto
 			if proto == "" {
-				if config.HTTPSPorts[p.Port] {
+				if dict.HTTPSPorts[p.Port] {
 					proto = "https"
 				} else {
 					proto = "http"
@@ -83,14 +85,14 @@ func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int) []HTTPCa
 			req, err := http.NewRequestWithContext(ctx, "GET", baseURL+"/", nil)
 			connOK := false
 			if err == nil {
-				req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; agentscan/1.0)")
+				req.Header.Set("User-Agent", config.UserAgent)
 				if resp, err2 := filterClient.Do(req); err2 == nil {
 					connOK = true
 					server = strings.ToLower(resp.Header.Get("Server"))
 					ct = strings.ToLower(resp.Header.Get("Content-Type"))
 					resp.Body.Close()
 
-					for _, hint := range mcpServerHints {
+					for _, hint := range dict.MCPServerHints {
 						if strings.Contains(server, hint) {
 							priority = 2
 							break
@@ -124,14 +126,14 @@ func FilterHTTP(ctx context.Context, ports []PortResult, timeoutMs int) []HTTPCa
 					altBaseURL := fmt.Sprintf("%s://%s:%d", altProto, hostForURL(host), p.Port)
 					altReq, err2 := http.NewRequestWithContext(ctx, "GET", altBaseURL+"/", nil)
 					if err2 == nil {
-						altReq.Header.Set("User-Agent", "Mozilla/5.0 (compatible; agentscan/1.0)")
+						altReq.Header.Set("User-Agent", config.UserAgent)
 						if resp, err3 := filterClient.Do(altReq); err3 == nil {
 							baseURL = altBaseURL
 							server = strings.ToLower(resp.Header.Get("Server"))
 							ct = strings.ToLower(resp.Header.Get("Content-Type"))
 							resp.Body.Close()
 
-							for _, hint := range mcpServerHints {
+							for _, hint := range dict.MCPServerHints {
 								if strings.Contains(server, hint) {
 									priority = 2
 									break

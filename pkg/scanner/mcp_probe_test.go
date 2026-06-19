@@ -11,7 +11,7 @@ import (
 )
 
 func TestBuildProbeEndpointsExpandsMountPrefix(t *testing.T) {
-	got := buildProbeEndpoints("/9da4ht4y/")
+	got := buildProbeEndpoints("/9da4ht4y/", nil)
 	wantPrefix := []string{
 		"/9da4ht4y/",
 		"/9da4ht4y/mcp",
@@ -23,7 +23,7 @@ func TestBuildProbeEndpointsExpandsMountPrefix(t *testing.T) {
 }
 
 func TestBuildProbeEndpointsDoesNotExpandKnownEndpoint(t *testing.T) {
-	got := buildProbeEndpoints("/mcp")
+	got := buildProbeEndpoints("/mcp", nil)
 	mcpSSECount := 0
 	for _, ep := range got {
 		if ep == "/mcp/mcp" {
@@ -62,7 +62,7 @@ func TestProbeMCPWithHostnameFindsSSEUnderMountPrefix(t *testing.T) {
 	}))
 	defer server.Close()
 
-	got := ProbeMCPWithHostname(context.Background(), server.URL, "", "/prefix/", 1000)
+	got := ProbeMCPWithHostname(context.Background(), server.URL, "", "/prefix/", 1000, nil)
 	if got == nil {
 		t.Fatal("ProbeMCPWithHostname() returned nil, want auth-required SSE result")
 	}

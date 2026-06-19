@@ -1,0 +1,28 @@
+# HTTP Server 头指纹词
+# Server 响应头中出现这些字符串时，视为高优先级 MCP 候选
+
+# Python 生态
+uvicorn
+fastapi
+fastmcp
+gunicorn
+starlette
+hypercorn
+werkzeug
+python
+
+# Node.js / JS Runtime 生态
+express
+fastify
+node
+hono
+deno
+bun
+nestjs
+
+# 专有 MCP 生态
+gradio
+langflow
+
+# 其他语言
+kestrel

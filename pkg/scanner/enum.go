@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agentscan/agentscan/internal/sseutil"
@@ -14,6 +15,53 @@ import (
 )
 
 // ── Streamable HTTP 枚举（2025-03-26+ transport） ─────────────────────────────
+
+// EnumerateAllStreamable 在共享 HTTP client 上并行枚举 tools、resources、
+// resource templates、prompts，避免四次独立 TCP/TLS 握手。
+// 返回四者切片（任一为 nil 表示服务端不支持或返回空）。
+func EnumerateAllStreamable(ctx context.Context, baseURL, endpoint, messagePath, sessionID, hostname string, timeoutMs int) ([]models.MCPTool, []models.MCPResource, []models.MCPResourceTemplate, []models.MCPPrompt) {
+	timeout := time.Duration(timeoutMs) * time.Millisecond
+	client := buildHTTPClient(hostname, timeout)
+	postURL := resolvePostURL(baseURL, endpoint, messagePath)
+
+	// 完成 MCP 握手（notifications/initialized）
+	sendNotification(ctx, client, postURL, sessionID)
+
+	var (
+		tools     []models.MCPTool
+		resources []models.MCPResource
+		templates []models.MCPResourceTemplate
+		prompts   []models.MCPPrompt
+		wg        sync.WaitGroup
+	)
+	wg.Add(4)
+	go func() {
+		defer wg.Done()
+		if data := mcpRequest(ctx, client, postURL, sessionID, 2, "tools/list", map[string]interface{}{}); data != nil {
+			tools = extractTools(data)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if data := mcpRequest(ctx, client, postURL, sessionID, 3, "resources/list", map[string]interface{}{}); data != nil {
+			resources = extractResources(data)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if data := mcpRequest(ctx, client, postURL, sessionID, 5, "resources/templates/list", map[string]interface{}{}); data != nil {
+			templates = extractResourceTemplates(data)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if data := mcpRequest(ctx, client, postURL, sessionID, 4, "prompts/list", map[string]interface{}{}); data != nil {
+			prompts = extractPrompts(data)
+		}
+	}()
+	wg.Wait()
+	return tools, resources, templates, prompts
+}
 
 // EnumerateTools 枚举服务器工具列表（只读，不调用 tools/call）
 // hostname 用于 HTTPS SNI，为空时从 baseURL 推断

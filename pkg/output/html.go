@@ -98,7 +98,7 @@ func WriteHTMLReports(results []*models.MCPServer, baseDir string, targets []str
 		name string
 		lang reportLanguage
 	}{
-		{name: "report_zh.html", lang: zhReportLanguage()},
+		{name: "report.html", lang: zhReportLanguage()},
 		{name: "report_en.html", lang: enReportLanguage()},
 	}
 
@@ -107,6 +107,10 @@ func WriteHTMLReports(results []*models.MCPServer, baseDir string, targets []str
 		if err := writeHTMLReport(path, results, r.lang); err != nil {
 			return "", err
 		}
+	}
+	// summary.txt for MCP-only reports
+	if err := os.WriteFile(filepath.Join(reportDir, "summary.txt"), []byte(buildSummaryText(results)), 0644); err != nil {
+		return "", fmt.Errorf("write summary.txt: %w", err)
 	}
 	if err := writeTextReports(reportDir, results); err != nil {
 		return "", err
@@ -199,11 +203,12 @@ func sanitizeSlug(target string) string {
 }
 
 func writeHTMLReport(path string, results []*models.MCPServer, lang reportLanguage) error {
+	zh := lang.Code == "zh-CN"
 	data := htmlReport{
 		Lang:        lang,
 		GeneratedAt: time.Now().Format("2006-01-02 15:04:05"),
 		Summary:     summarizeResults(results),
-		Servers:     buildHTMLServers(results),
+		Servers:     buildHTMLServersLang(results, zh),
 	}
 
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
@@ -239,6 +244,10 @@ func summarizeResults(results []*models.MCPServer) JSONSummary {
 }
 
 func buildHTMLServers(results []*models.MCPServer) []htmlServer {
+	return buildHTMLServersLang(results, false)
+}
+
+func buildHTMLServersLang(results []*models.MCPServer, zh bool) []htmlServer {
 	servers := make([]htmlServer, 0, len(results))
 	for _, r := range results {
 		protocol := r.ProtocolVersion
@@ -246,13 +255,14 @@ func buildHTMLServers(results []*models.MCPServer) []htmlServer {
 			protocol = "unknown"
 		}
 
-		status := "auth"
+		status := mcpStatusEN(r.NoAuth, r.AuthRequired)
+		if zh {
+			status = mcpStatusZH(r.NoAuth, r.AuthRequired)
+		}
 		statusClass := "status-neutral"
 		if r.AuthRequired {
-			status = "auth-required"
 			statusClass = "status-warning"
 		} else if r.NoAuth {
-			status = "no-auth"
 			statusClass = "status-danger"
 		}
 
@@ -323,12 +333,11 @@ func sortedPrompts(items []models.MCPPrompt) []models.MCPPrompt {
 
 func writeTextReports(reportDir string, results []*models.MCPServer) error {
 	files := map[string]string{
-		"summary.txt":       buildSummaryText(results),
-		"all_findings.txt":  buildFindingsText(results, func(*models.MCPServer) bool { return true }),
-		"exposed.txt":       buildFindingsText(results, func(s *models.MCPServer) bool { return s.NoAuth && !s.AuthRequired }),
-		"auth_required.txt": buildFindingsText(results, func(s *models.MCPServer) bool { return s.AuthRequired }),
-		"tools.txt":         buildToolsText(results),
-		"evidence.txt":      buildEvidenceText(results),
+		"mcp_findings.txt":      buildFindingsText(results, func(*models.MCPServer) bool { return true }),
+		"mcp_no_auth.txt":       buildFindingsText(results, func(s *models.MCPServer) bool { return s.NoAuth && !s.AuthRequired }),
+		"mcp_auth_required.txt": buildFindingsText(results, func(s *models.MCPServer) bool { return s.AuthRequired }),
+		"mcp_tools.txt":         buildToolsText(results),
+		"mcp_evidence.txt":      buildEvidenceText(results),
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(reportDir, name), []byte(content), 0644); err != nil {

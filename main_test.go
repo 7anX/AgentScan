@@ -159,6 +159,33 @@ func TestMCPHelpShowsGroupedUsefulOptions(t *testing.T) {
 	}
 }
 
+func TestA2ACommandParsesFlagsAfterTargets(t *testing.T) {
+	args := []string{
+		"agentscan", "a2a", "positional.example",
+		"--format", "json",
+		"--output", "a2a.json",
+		"--skip-port-scan",
+		"--a2a-threads", "17",
+		"--include-probable",
+		"--verbose-raw",
+		"--target", "flagged.example",
+	}
+
+	got := parseA2ACLIForTest(t, args)
+	if !reflect.DeepEqual(got.Targets, []string{"flagged.example", "positional.example"}) {
+		t.Fatalf("targets = %#v", got.Targets)
+	}
+	if got.Format != "json" || got.Output != "a2a.json" {
+		t.Fatalf("format/output = %q/%q, want json/a2a.json", got.Format, got.Output)
+	}
+	if !got.SkipPortScan || !got.IncludeProbable || !got.VerboseRaw {
+		t.Fatalf("boolean flags not parsed: %#v", got)
+	}
+	if got.A2AThreads != 17 {
+		t.Fatalf("a2a threads = %d, want 17", got.A2AThreads)
+	}
+}
+
 func parseCLIForTest(t *testing.T, args []string) parsedCLI {
 	t.Helper()
 
@@ -186,6 +213,45 @@ func parseCLIForTest(t *testing.T, args []string) parsedCLI {
 		Commands: []*cli.Command{
 			mcpCommandWithAction(capture),
 			scanCommandWithAction(capture),
+		},
+	}
+
+	if err := app.Run(normalizeArgs(args, app.Commands)); err != nil {
+		t.Fatalf("app.Run() error = %v", err)
+	}
+	return parsed
+}
+
+type parsedA2ACLI struct {
+	Targets         []string
+	Output          string
+	Format          string
+	SkipPortScan    bool
+	IncludeProbable bool
+	VerboseRaw      bool
+	A2AThreads      int
+}
+
+func parseA2ACLIForTest(t *testing.T, args []string) parsedA2ACLI {
+	t.Helper()
+
+	var parsed parsedA2ACLI
+	capture := func(c *cli.Context) error {
+		parsed = parsedA2ACLI{
+			Targets:         append(c.StringSlice("target"), c.Args().Slice()...),
+			Output:          c.String("output"),
+			Format:          c.String("format"),
+			SkipPortScan:    c.Bool("skip-port-scan"),
+			IncludeProbable: c.Bool("include-probable"),
+			VerboseRaw:      c.Bool("verbose-raw"),
+			A2AThreads:      c.Int("a2a-threads"),
+		}
+		return nil
+	}
+	app := &cli.App{
+		Name: "agentscan",
+		Commands: []*cli.Command{
+			a2aCommandWithAction(capture),
 		},
 	}
 

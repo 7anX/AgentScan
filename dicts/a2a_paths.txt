@@ -1,0 +1,5 @@
+# A2A Agent Card 发现路径
+# 顺序即优先级：标准路径在前，非标准路径在后
+/.well-known/agent-card.json
+/.well-known/agent.json
+/agent.json

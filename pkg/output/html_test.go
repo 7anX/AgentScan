@@ -58,7 +58,7 @@ func TestWriteHTMLReportsCreatesChineseAndEnglishReports(t *testing.T) {
 		t.Fatalf("WriteHTMLReports() error = %v", err)
 	}
 
-	zh := readFileForTest(t, filepath.Join(dir, "report_zh.html"))
+	zh := readFileForTest(t, filepath.Join(dir, "report.html"))
 	en := readFileForTest(t, filepath.Join(dir, "report_en.html"))
 
 	for _, item := range []struct {
@@ -85,10 +85,10 @@ func TestWriteHTMLReportsCreatesChineseAndEnglishReports(t *testing.T) {
 	}
 
 	summary := readFileForTest(t, filepath.Join(dir, "summary.txt"))
-	exposed := readFileForTest(t, filepath.Join(dir, "exposed.txt"))
-	allFindings := readFileForTest(t, filepath.Join(dir, "all_findings.txt"))
-	tools := readFileForTest(t, filepath.Join(dir, "tools.txt"))
-	evidence := readFileForTest(t, filepath.Join(dir, "evidence.txt"))
+	exposed := readFileForTest(t, filepath.Join(dir, "mcp_no_auth.txt"))
+	allFindings := readFileForTest(t, filepath.Join(dir, "mcp_findings.txt"))
+	tools := readFileForTest(t, filepath.Join(dir, "mcp_tools.txt"))
+	evidence := readFileForTest(t, filepath.Join(dir, "mcp_evidence.txt"))
 
 	for _, item := range []struct {
 		name    string
@@ -114,4 +114,62 @@ func readFileForTest(t *testing.T, path string) string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(data)
+}
+
+func TestWriteUnifiedHTMLReportsContainsBothProtocols(t *testing.T) {
+	mcpResults := []*models.MCPServer{
+		{
+			IP: "127.0.0.1", Port: 8001, URL: "http://127.0.0.1:8001",
+			Endpoint: "/mcp", Transport: models.TransportStreamableHTTP,
+			FingerprintScore: 0.85, NoAuth: true, ServerName: "TestMCP", ToolCount: 3,
+			Evidence: models.MCPEvidence{
+				URL: "http://127.0.0.1:8001/mcp",
+				Fingerprint: models.FingerprintEvidence{Score: 0.85, Signals: []string{"protocol_version"}},
+				Auth:        models.AuthEvidence{Status: "no-auth", Reasons: []string{"init ok"}},
+				JSONRPC:     models.JSONRPCSummary{RequestMethod: "initialize", StatusCode: 200},
+			},
+		},
+	}
+	a2aResults := []*models.A2AServer{
+		{
+			IP: "127.0.0.2", Port: 443, URL: "https://127.0.0.2",
+			CardURL: "https://127.0.0.2/.well-known/agent-card.json",
+			CardPath: "/.well-known/agent-card.json",
+			Profile: models.A2AProfileAgentCard,
+			ExposureStatus: models.A2AExposureJSONRPCNoAuth,
+			A2AConfirmed: true, FingerprintScore: 0.90, NoAuth: true,
+			AgentName: "TestA2AAgent", SkillCount: 2,
+			Skills: []models.A2ASkill{{ID: "s1", Name: "Search"}},
+			Evidence: models.A2AEvidence{
+				Auth: models.A2AAuthEvidence{Declared: "declared_none", Status: "confirmed_a2a_jsonrpc_no_auth"},
+			},
+		},
+	}
+
+	dir, err := WriteUnifiedHTMLReports(mcpResults, a2aResults, t.TempDir(), nil, "")
+	if err != nil {
+		t.Fatalf("WriteUnifiedHTMLReports() error = %v", err)
+	}
+
+	en := readFileForTest(t, filepath.Join(dir, "report_en.html"))
+
+	for _, want := range []string{
+		"badge-mcp", "badge-a2a",          // both protocol badges
+		"TestMCP",                           // MCP server name
+		"TestA2AAgent",                      // A2A agent name
+		"tab-mcp", "tab-a2a",               // tab panel IDs
+		"confirmed_a2a_jsonrpc_no_auth",     // A2A status
+		"127.0.0.1:8001/mcp",              // MCP target
+	} {
+		if !strings.Contains(en, want) {
+			t.Fatalf("unified report missing %q", want)
+		}
+	}
+
+	// Text files from both protocols should exist
+	for _, name := range []string{"summary.txt", "mcp_findings.txt", "mcp_tools.txt", "a2a_no_auth.txt", "a2a_skills.txt"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("missing report file %s: %v", name, err)
+		}
+	}
 }

@@ -1,0 +1,24 @@
+# MCP Auth 打分路径集合
+# 在此路径上收到 4xx 可加 1 分（联合其他信号判断 auth-required）
+/mcp
+/mcp/
+/sse
+/messages
+/message
+/messages/
+/sse/
+/mcp/sse
+/mcp/messages
+/mcp/message
+/api/mcp
+/api/mcp/sse
+/v1/mcp
+/mcp/v1
+/api/v1/mcp
+/api/v1/mcp/sse
+/mcp-server
+/mcp-server/sse
+/gradio_api/mcp
+/gradio_api/mcp/
+/mcp/messages/
+/agent/mcp

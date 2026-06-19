@@ -15,7 +15,7 @@ const (
 	DefaultConcurrency = 500
 )
 
-// DefaultPorts 默认扫描端口列表（按命中率降序排列）。
+// DefaultPorts MCP 默认扫描端口列表（按命中率降序排列）。
 //
 // 数据来源（2025-06 实测）：
 //   Quake  app:"Model Context Protocol"（全球）: 8000, 8001, 443, 3000, 80
@@ -41,10 +41,45 @@ var DefaultPorts = []int{
 	// Tier 2 — 实测发现 + 框架默认
 	11003, 7860, 3030, 8443, 5000,
 	// Tier 3 — AI/云原生生态补充
-	8888, // Jupyter Notebook / Gradio 备用（AI 工具链高频）
-	8787, // Cloudflare Workers wrangler dev 本地默认
-	5001, // Flask macOS 替代（AirPlay 占用 5000）
+	8888,  // Jupyter Notebook / Gradio 备用（AI 工具链高频）
+	8787,  // Cloudflare Workers wrangler dev 本地默认
+	5001,  // Flask macOS 替代（AirPlay 占用 5000）
 	4000, 9000,
+	// Tier 4 — AI Gateway 专用端口（实测：OmniRoute/Routiform 中国部署）
+	20128, // OmniRoute AI Gateway 默认端口（Quake/实测大量命中）
+	20888, // OmniRoute/Routiform 变体端口（实测命中）
+	9001,  // OmniRoute 变体；Portainer 也用此端口
+	3002,  // OmniRoute 变体；Next.js dev 副端口
+	// Tier 5 — 通用补充（低优先级，无 MCP 特定证据）
+	8081,  // 常见反向代理次级端口
+	10000, // 通用服务端口
+}
+
+// A2ADefaultPorts A2A 默认扫描端口列表。
+//
+// A2A spec 未约定专用端口，部署以标准 web 端口为主。
+// 数据来源：A2A 规范参考实现 + 实测已知 A2A 服务。
+//
+//   - 80/443:  标准 HTTP/HTTPS；生产部署首选
+//   - 8080/8443: 非标准 HTTP/HTTPS；开发 / 反向代理常见
+//   - 3000/8000: Node.js / Python 框架开发默认端口
+//   - 8001/3001/5000: 次级开发端口
+//   - 4010:  EasyClaw A2A marketplace 专用端口
+//   - 9000:  通用服务端口
+var A2ADefaultPorts = []int{
+	// Tier 1 — 标准 web 端口
+	80, 443, 8080, 8443,
+	// Tier 2 — 框架默认开发端口
+	3000, 8000, 8001, 3001, 5000,
+	// Tier 3 — AI 生态特定端口
+	7860,  // Gradio（HuggingFace 生态，A2A agent 常见宿主）
+	8501,  // Streamlit 默认端口
+	8888,  // Jupyter Notebook / Gradio 备用
+	4010,  // EasyClaw A2A marketplace
+	// Tier 4 — 通用补充
+	8081, 9000, 9001, 10000,
+	// Tier 5 — AI Gateway（OmniRoute 等中国部署，A2A 可能共用）
+	20128, 20888,
 }
 
 // ── MCP 端点字典 ─────────────────────────────────────────────────────────────
@@ -81,20 +116,25 @@ var MCPEndpoints = []string{
 	"/mcp/messages",    // MCP router 挂 /mcp 下的消息子路由
 	"/mcp/message",     // 同上单数变体；Spring AI MetricsHub
 	"/api/mcp",         // Spring AI Streamable HTTP；企业 RESTful 规范
+	"/api/mcp/sse",     // /api/mcp 下的 SSE 子路由
 	"/api/v1/mcp",      // Langflow；brightbean-studio
 	"/api/v1/mcp/sse",  // Langflow SSE 端点
 	"/mcp-server",      // 教程推荐挂载前缀
 	"/mcp-server/sse",  // 教程组合变体（FastAPI mount 示例）
+	"/agent/mcp",       // agent 前缀挂载 MCP
 
 	// T2 - 版本化 / 尾斜杠变体
+	"/mcp/",          // 带尾斜杠变体（部分框架重定向）
 	"/sse/",          // Starlette：不带尾斜杠会 307
 	"/v1/mcp",        // 对外公共服务版本号
+	"/mcp/v1",        // MCP 版本化子路由
 	"/mcp/messages/", // Azure Samples / Langflow 变体
 	"/mcp/v1/messages",
 
 	// T3 - 服务发现 / 健康检查（用于 fingerprint，命中即可确认）
 	"/.well-known/mcp/server-card.json", // MCP 服务发现；Skyvern / react-server / mos
 	"/.well-known/mcp",                  // MCP 状态端点
+	"/.well-known/mcp.json",             // MCP 服务发现 JSON 变体
 	"/mcp/health",                       // holaboss-ai/holaOS 健康检查
 }
 
@@ -105,6 +145,7 @@ var SSELegacyPaths = map[string]bool{
 	"/mcp/sse":          true,
 	"/mcp-server/sse":   true,
 	"/sse/":             true,
+	"/api/mcp/sse":      true, // /api/mcp 下的 SSE 子路由
 	"/api/v1/mcp/sse":   true, // Langflow SSE 端点
 	"/gradio_api/mcp/":  true, // Gradio 同时支持 SSE legacy 和 Streamable HTTP
 }
@@ -112,15 +153,22 @@ var SSELegacyPaths = map[string]bool{
 // MCPAuthPaths 已知 MCP 特征路径集合，用于 auth-required 打分。
 // 在此路径上收到 4xx 可加 1 分（联合其他信号判断）。
 var MCPAuthPaths = map[string]bool{
-	"/mcp": true, "/sse": true, "/messages": true, "/message": true,
+	"/mcp": true, "/mcp/": true, "/sse": true, "/messages": true, "/message": true,
 	"/messages/": true, "/sse/": true,
 	"/mcp/sse": true, "/mcp/messages": true, "/mcp/message": true,
-	"/api/mcp": true, "/v1/mcp": true, "/api/v1/mcp": true,
+	"/api/mcp": true, "/api/mcp/sse": true,
+	"/v1/mcp": true, "/mcp/v1": true, "/api/v1/mcp": true,
 	"/api/v1/mcp/sse": true,
 	"/mcp-server": true, "/mcp-server/sse": true,
 	"/gradio_api/mcp": true, "/gradio_api/mcp/": true,
 	"/mcp/messages/": true,
+	"/agent/mcp": true,
 }
+
+// ── HTTP 请求头 ───────────────────────────────────────────────────────────────
+
+// UserAgent 所有 HTTP 请求统一使用的 User-Agent，模拟主流浏览器避免被过滤。
+const UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 
 // ── HTTP Server 头特征 ───────────────────────────────────────────────────────
 // FilterHTTP 阶段用于提升候选优先级（命中则 priority=2）。
@@ -158,4 +206,19 @@ var MCPServerHints = []string{
 var HTTPSPorts = map[int]bool{
 	443:  true,
 	8443: true,
+}
+
+// ── A2A 路径字典 ──────────────────────────────────────────────────────────────
+// buildA2ACardPaths 使用此列表作为 well-known card 发现的基础路径。
+// 顺序即优先级：标准路径在前，非标准路径在后。
+
+// A2ACardPaths A2A agent card 发现路径列表。
+//
+//   - /.well-known/agent-card.json: A2A spec 标准路径（官方规范）
+//   - /.well-known/agent.json:      A2A legacy 路径（早期实现）
+//   - /agent.json:                  根路径变体（无 .well-known 前缀的极简部署）
+var A2ACardPaths = []string{
+	"/.well-known/agent-card.json", // A2A spec 标准（官方规范）
+	"/.well-known/agent.json",      // A2A legacy（早期实现）
+	"/agent.json",                  // 根路径变体（极简部署）
 }

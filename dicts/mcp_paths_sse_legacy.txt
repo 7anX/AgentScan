@@ -1,0 +1,10 @@
+# SSE Legacy 路径子集
+# 这些路径需要用 HTTP+SSE legacy 协议探测（GET + 保持长连接）
+# 当 streamable HTTP probe 在这些路径失败时，额外尝试 legacy SSE 握手
+/sse
+/mcp/sse
+/mcp-server/sse
+/sse/
+/api/mcp/sse
+/api/v1/mcp/sse
+/gradio_api/mcp/

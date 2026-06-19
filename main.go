@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -15,6 +16,15 @@ import (
 	"github.com/agentscan/agentscan/pkg/scanner"
 	"github.com/urfave/cli/v2"
 )
+
+// loadDict loads the DictSet from --dict-dir (if set) and prints any warnings.
+func loadDict(dictDir string) *config.DictSet {
+	ds, err := config.LoadDictSet(dictDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[WARN] dict-dir: %v\n", err)
+	}
+	return ds
+}
 
 func main() {
 	app := newApp()
@@ -33,6 +43,7 @@ func newApp() *cli.App {
 		Version:   version.Version,
 		Commands: []*cli.Command{
 			mcpCommand(),
+			a2aCommand(),
 			scanCommand(),
 		},
 	}
@@ -54,16 +65,15 @@ func commonFlags() []cli.Flag {
 			Category: "Input",
 		},
 		&cli.StringFlag{
-			Name: "ports",
-			Value: strings.Join(func() []string {
-				s := make([]string, len(config.DefaultPorts))
-				for i, p := range config.DefaultPorts {
-					s[i] = fmt.Sprintf("%d", p)
-				}
-				return s
-			}(), ","),
-			Usage:       "Ports to scan, comma-separated",
-			DefaultText: "built-in MCP list",
+			Name:        "dict-dir",
+			Usage:       "Directory containing custom dictionary txt files (mcp_ports.txt, a2a_ports.txt, mcp_paths.txt, ...)",
+			DefaultText: "",
+			Category:    "Scan",
+		},
+		&cli.StringFlag{
+			Name:        "ports",
+			Usage:       "Ports to scan, comma-separated (overrides dict-dir / built-in list)",
+			DefaultText: "built-in list for each protocol",
 			Category:    "Scan",
 		},
 		&cli.IntFlag{
@@ -133,15 +143,16 @@ OPTIONS:
      -f, --file FILE           Read targets from file
 
    Scan
-     --ports LIST              Ports to scan (default: built-in MCP list)
+     --ports LIST              Ports to scan (overrides dict-dir / built-in list)
+     --dict-dir DIR            Directory with custom dict txt files
      --skip-port-scan          Input is already open host:port
      -T, --threads N           TCP scan concurrency (default: 500)
      --timeout MS              TCP timeout (default: 2000)
      --mcp-threads N           MCP probe concurrency (default: 50)
 
    Output
-     HTML reports             Auto-written to agentscan-report-*/
-     -o, --output FILE         Write JSON report
+     HTML reports             Auto-written to agentscan-report-*/ and agentscan-a2a-*/
+     -o, --output FILE         Write MCP JSON; A2A JSON written to FILE_a2a.json
      --format terminal|json    Output format (default: terminal)
      -v, --verbose             Show probe details
      --no-color, --Cn          Disable colors
@@ -189,6 +200,79 @@ func mcpCommandWithAction(action cli.ActionFunc) *cli.Command {
 	}
 }
 
+const a2aHelpTemplate = `NAME:
+   {{.HelpName}} - {{.Usage}}
+
+USAGE:
+   {{.UsageText}}
+
+EXAMPLES:
+   agentscan {{.Name}} example.com
+   agentscan {{.Name}} -f targets.txt --skip-port-scan -o results.json
+
+OPTIONS:
+   Input
+     TARGET...                 IP, CIDR, range, domain, host:port, or URL
+     -t, --target TARGET       Add target (repeatable)
+     -f, --file FILE           Read targets from file
+
+   Scan
+     --ports LIST              Ports to scan (overrides dict-dir / built-in list)
+     --dict-dir DIR            Directory with custom dict txt files
+     --skip-port-scan          Input is already open host:port
+     -T, --threads N           TCP scan concurrency (default: 500)
+     --timeout MS              TCP timeout (default: 2000)
+     --a2a-threads N           A2A probe concurrency (default: 50)
+
+   Output
+     -o, --output FILE         Write JSON report
+     --format terminal|json    Output format (default: terminal)
+     -v, --verbose             Show probe details
+     --no-color, --Cn          Disable colors
+
+   Filter / Debug
+     --include-probable        Include probable agent-discovery matches
+     --verbose-raw             Include raw A2A card response in JSON
+     -h, --help                Show help
+`
+
+func a2aCommand() *cli.Command {
+	return a2aCommandWithAction(runA2AAction)
+}
+
+func a2aCommandWithAction(action cli.ActionFunc) *cli.Command {
+	flags := append(commonFlags(),
+		&cli.BoolFlag{
+			Name:               "include-probable",
+			Usage:              "Include probable agent-discovery matches",
+			DisableDefaultText: true,
+			Category:           "Filter",
+		},
+		&cli.BoolFlag{
+			Name:               "verbose-raw",
+			Usage:              "Include raw A2A card response in JSON",
+			DisableDefaultText: true,
+			Category:           "Debug",
+		},
+		&cli.IntFlag{
+			Name:        "a2a-threads",
+			Value:       50,
+			Usage:       "A2A probe concurrency",
+			DefaultText: "50",
+			Category:    "Scan",
+		},
+	)
+	return &cli.Command{
+		Name:                   "a2a",
+		Usage:                  "Scan A2A Agent Cards",
+		UsageText:              "agentscan a2a [options] [target...]",
+		UseShortOptionHandling: true,
+		Flags:                  flags,
+		Action:                 action,
+		CustomHelpTemplate:     a2aHelpTemplate,
+	}
+}
+
 func scanCommand() *cli.Command {
 	return scanCommandWithAction(runAction)
 }
@@ -229,13 +313,19 @@ func scanCommandWithAction(action cli.ActionFunc) *cli.Command {
 func runAction(c *cli.Context) error {
 	rawTargets := append(c.StringSlice("target"), c.Args().Slice()...)
 
+	ds := loadDict(c.String("dict-dir"))
+
 	cfg := models.DefaultConfig()
+	cfg.Dict = ds
+	cfg.Ports = ds.MCPPorts // default: dict (custom or built-in MCP ports)
+	if c.IsSet("ports") {
+		cfg.Ports = parsePorts(c.String("ports"))
+	}
 	cfg.Concurrency = c.Int("threads")
 	cfg.TimeoutConnectMs = c.Int("timeout")
 	cfg.TimeoutHTTPMs = cfg.TimeoutConnectMs * 10
 	cfg.TimeoutMCPMs = cfg.TimeoutConnectMs * 20
 	cfg.ExcludeHoneypots = c.Bool("exclude-honeypots")
-	cfg.Ports = parsePorts(c.String("ports"))
 	cfg.VerboseRaw = c.Bool("verbose-raw")
 	cfg.Verbose = c.Bool("verbose")
 	cfg.MCPConcurrency = c.Int("mcp-threads")
@@ -260,19 +350,62 @@ func runAction(c *cli.Context) error {
 	return err
 }
 
+func runA2AAction(c *cli.Context) error {
+	rawTargets := append(c.StringSlice("target"), c.Args().Slice()...)
+
+	ds := loadDict(c.String("dict-dir"))
+
+	cfg := models.DefaultA2AConfig()
+	cfg.Dict = ds
+	cfg.Ports = ds.A2APorts // default: dict (custom or built-in A2A ports)
+	if c.IsSet("ports") {
+		cfg.Ports = parsePorts(c.String("ports"))
+	}
+	cfg.Concurrency = c.Int("threads")
+	cfg.TimeoutConnectMs = c.Int("timeout")
+	cfg.TimeoutHTTPMs = cfg.TimeoutConnectMs * 10
+	// A2A probe = card fetch + 1-2 JSON-RPC calls; 4x is sufficient and avoids 45s per-candidate caps
+	cfg.TimeoutMCPMs = cfg.TimeoutConnectMs * 4
+	cfg.VerboseRaw = c.Bool("verbose-raw")
+	cfg.Verbose = c.Bool("verbose")
+	cfg.MCPConcurrency = c.Int("a2a-threads")
+	cfg.SkipPortScan = c.Bool("skip-port-scan")
+
+	noColor := c.Bool("no-color") || output.NoColorEnabled()
+	format := c.String("format")
+	outputPath := c.String("output")
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	_, err := scanner.RunA2AScan(
+		ctx,
+		rawTargets,
+		c.String("file"),
+		cfg,
+		outputPath,
+		format,
+		noColor,
+		c.Bool("include-probable"),
+	)
+	return err
+}
+
 func parsePorts(s string) []int {
 	parts := strings.Split(s, ",")
 	var ports []int
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
-		var port int
-		fmt.Sscanf(p, "%d", &port)
-		if port > 0 && port < 65536 {
-			ports = append(ports, port)
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[WARN] invalid port %q: %v\n", p, err)
+			continue
 		}
-	}
-	if len(ports) == 0 {
-		return models.DefaultConfig().Ports
+		if n < 1 || n > 65535 {
+			fmt.Fprintf(os.Stderr, "[WARN] port %d out of range (1-65535), skipped\n", n)
+			continue
+		}
+		ports = append(ports, n)
 	}
 	return ports
 }
