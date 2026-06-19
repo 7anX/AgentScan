@@ -283,6 +283,7 @@ func isSSEEndpoint(ctx context.Context, client *http.Client, url string) bool {
 		return false
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("User-Agent", config.UserAgent)
 	resp, err := client.Do(req)
 	if err != nil {
 		return false
@@ -456,6 +457,7 @@ func tryHTTPSSELegacy(ctx context.Context, client *http.Client, baseURL, ssePath
 		return nil
 	}
 	sseReq.Header.Set("Accept", "text/event-stream")
+	sseReq.Header.Set("User-Agent", config.UserAgent)
 
 	sseResp, err := client.Do(sseReq)
 	if err != nil {

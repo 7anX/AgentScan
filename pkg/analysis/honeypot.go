@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/agentscan/agentscan/internal/sseutil"
+	"github.com/agentscan/agentscan/pkg/config"
 	"github.com/agentscan/agentscan/pkg/models"
 	"github.com/agentscan/agentscan/pkg/netproxy"
 )
@@ -75,7 +76,6 @@ func newTLSClient(hostname string, timeout time.Duration) *http.Client {
 			Proxy:               netproxy.HTTPProxy(),
 			DialContext:         netproxy.HTTPDialContext(timeout),
 			TLSHandshakeTimeout: timeout,
-			DisableKeepAlives:   true,
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -93,6 +93,7 @@ func sendInitProbe(ctx context.Context, client *http.Client, url, version string
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("User-Agent", config.UserAgent)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -124,7 +125,7 @@ func buildProbeBody(version string) []byte {
 		"params": map[string]interface{}{
 			"protocolVersion": version,
 			"capabilities":    map[string]interface{}{},
-			"clientInfo":      map[string]interface{}{"name": "agentscan", "version": "1.0.0"},
+			"clientInfo":      map[string]interface{}{"name": "mcp-client", "version": "1.0.0"},
 		},
 	})
 	return b

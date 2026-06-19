@@ -126,7 +126,7 @@ func (p *Pipeline) scanToHTTPCandidates(ctx context.Context, targets []target.Ta
 			})
 		}
 	} else {
-		portResults = ScanPorts(ctx, targets, p.cfg.Concurrency, p.cfg.TimeoutConnectMs, p.cfg.Verbose)
+		portResults = ScanPorts(ctx, targets, p.cfg.Concurrency, p.cfg.TimeoutConnectMs, p.cfg.Verbose, p.cfg.DelayMs)
 	}
 	if len(portResults) == 0 {
 		fmt.Fprintf(os.Stderr, "      no open ports found\n\n")
@@ -211,6 +211,8 @@ func (p *Pipeline) RunFromCandidates(ctx context.Context, candidates []HTTPCandi
 			defer wg.Done()
 			defer func() { <-sem }()
 			defer done.Add(1)
+
+			scanDelay(p.cfg.DelayMs)
 
 			start := time.Now()
 			candidateCtx, cancelCandidate := context.WithTimeout(ctx, candidateTimeoutDuration(p.cfg))
@@ -332,10 +334,10 @@ func (p *Pipeline) analyzeCandidate(ctx context.Context, c HTTPCandidate) *model
 
 	if probe.Transport == models.TransportHTTPSSELegacy {
 		// SSE legacy：单次 session 枚举四类，避免四次独立握手
-		tools, resources, resourceTemplates, prompts = EnumerateAllSSELegacy(ctx, c.BaseURL, probe.Endpoint, c.Hostname, p.cfg.TimeoutMCPMs)
+		tools, resources, resourceTemplates, prompts = EnumerateAllSSELegacy(ctx, c.BaseURL, probe.Endpoint, c.Hostname, p.cfg.TimeoutMCPMs, p.cfg.DelayMs)
 	} else {
 		// Streamable HTTP：共享 client，四路并行枚举
-		tools, resources, resourceTemplates, prompts = EnumerateAllStreamable(ctx, c.BaseURL, probe.Endpoint, probe.MessagePath, probe.SessionID, c.Hostname, p.cfg.TimeoutMCPMs)
+		tools, resources, resourceTemplates, prompts = EnumerateAllStreamable(ctx, c.BaseURL, probe.Endpoint, probe.MessagePath, probe.SessionID, c.Hostname, p.cfg.TimeoutMCPMs, p.cfg.DelayMs)
 	}
 
 	server.Tools = tools

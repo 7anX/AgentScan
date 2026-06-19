@@ -24,7 +24,7 @@ type PortResult struct {
 }
 
 // ScanPorts 并发 TCP 探测，返回开放端口列表
-func ScanPorts(ctx context.Context, targets []target.Target, concurrency int, timeoutMs int, verbose bool) []PortResult {
+func ScanPorts(ctx context.Context, targets []target.Target, concurrency int, timeoutMs int, verbose bool, delayMs int) []PortResult {
 	sem := semaphore.NewWeighted(int64(concurrency))
 	timeout := time.Duration(timeoutMs) * time.Millisecond
 
@@ -42,6 +42,7 @@ func ScanPorts(ctx context.Context, targets []target.Target, concurrency int, ti
 		if err := sem.Acquire(ctx, 1); err != nil {
 			break
 		}
+		scanDelay(delayMs)
 		wg.Add(1)
 		go func(t target.Target) {
 			defer wg.Done()

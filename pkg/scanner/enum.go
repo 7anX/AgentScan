@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/agentscan/agentscan/internal/sseutil"
+	"github.com/agentscan/agentscan/pkg/config"
 	"github.com/agentscan/agentscan/pkg/models"
 )
 
@@ -19,7 +20,7 @@ import (
 // EnumerateAllStreamable 在共享 HTTP client 上并行枚举 tools、resources、
 // resource templates、prompts，避免四次独立 TCP/TLS 握手。
 // 返回四者切片（任一为 nil 表示服务端不支持或返回空）。
-func EnumerateAllStreamable(ctx context.Context, baseURL, endpoint, messagePath, sessionID, hostname string, timeoutMs int) ([]models.MCPTool, []models.MCPResource, []models.MCPResourceTemplate, []models.MCPPrompt) {
+func EnumerateAllStreamable(ctx context.Context, baseURL, endpoint, messagePath, sessionID, hostname string, timeoutMs int, delayMs int) ([]models.MCPTool, []models.MCPResource, []models.MCPResourceTemplate, []models.MCPPrompt) {
 	timeout := time.Duration(timeoutMs) * time.Millisecond
 	client := buildHTTPClient(hostname, timeout)
 	postURL := resolvePostURL(baseURL, endpoint, messagePath)
@@ -32,8 +33,31 @@ func EnumerateAllStreamable(ctx context.Context, baseURL, endpoint, messagePath,
 		resources []models.MCPResource
 		templates []models.MCPResourceTemplate
 		prompts   []models.MCPPrompt
-		wg        sync.WaitGroup
 	)
+
+	if delayMs > 0 {
+		// 延时模式：串行 + 每步间隔
+		scanDelay(delayMs)
+		if data := mcpRequest(ctx, client, postURL, sessionID, 2, "tools/list", map[string]interface{}{}); data != nil {
+			tools = extractTools(data)
+		}
+		scanDelay(delayMs)
+		if data := mcpRequest(ctx, client, postURL, sessionID, 3, "resources/list", map[string]interface{}{}); data != nil {
+			resources = extractResources(data)
+		}
+		scanDelay(delayMs)
+		if data := mcpRequest(ctx, client, postURL, sessionID, 5, "resources/templates/list", map[string]interface{}{}); data != nil {
+			templates = extractResourceTemplates(data)
+		}
+		scanDelay(delayMs)
+		if data := mcpRequest(ctx, client, postURL, sessionID, 4, "prompts/list", map[string]interface{}{}); data != nil {
+			prompts = extractPrompts(data)
+		}
+		return tools, resources, templates, prompts
+	}
+
+	// 无延时：4 路并行（原有行为）
+	var wg sync.WaitGroup
 	wg.Add(4)
 	go func() {
 		defer wg.Done()
@@ -127,7 +151,7 @@ func EnumeratePrompts(ctx context.Context, baseURL, endpoint, messagePath, sessi
 
 // EnumerateAllSSELegacy 在单个 SSE session 内依次枚举 tools、resources、resource templates、prompts，
 // 避免为每类数据单独握手。返回四者切片（任一为 nil 表示服务端不支持或返回空）。
-func EnumerateAllSSELegacy(ctx context.Context, baseURL, ssePath, hostname string, timeoutMs int) ([]models.MCPTool, []models.MCPResource, []models.MCPResourceTemplate, []models.MCPPrompt) {
+func EnumerateAllSSELegacy(ctx context.Context, baseURL, ssePath, hostname string, timeoutMs int, delayMs int) ([]models.MCPTool, []models.MCPResource, []models.MCPResourceTemplate, []models.MCPPrompt) {
 	sess := newSSESession(ctx, baseURL, ssePath, hostname, timeoutMs)
 	if sess == nil {
 		return nil, nil, nil, nil
@@ -137,9 +161,13 @@ func EnumerateAllSSELegacy(ctx context.Context, baseURL, ssePath, hostname strin
 	// #5: 完成 MCP 握手
 	sendNotification(sess.ctx, sess.client, sess.postURL, "")
 
+	scanDelay(delayMs)
 	tools := extractTools(sseRequest(sess, 2, "tools/list", map[string]interface{}{}))
+	scanDelay(delayMs)
 	resources := extractResources(sseRequest(sess, 3, "resources/list", map[string]interface{}{}))
+	scanDelay(delayMs)
 	templates := extractResourceTemplates(sseRequest(sess, 5, "resources/templates/list", map[string]interface{}{}))
+	scanDelay(delayMs)
 	prompts := extractPrompts(sseRequest(sess, 4, "prompts/list", map[string]interface{}{}))
 	return tools, resources, templates, prompts
 }
@@ -179,6 +207,7 @@ func newSSESession(ctx context.Context, baseURL, ssePath, hostname string, timeo
 		return nil
 	}
 	sseReq.Header.Set("Accept", "text/event-stream")
+	sseReq.Header.Set("User-Agent", config.UserAgent)
 
 	sseResp, err := client.Do(sseReq)
 	if err != nil {
@@ -231,7 +260,7 @@ func newSSESession(ctx context.Context, baseURL, ssePath, hostname string, timeo
 		"params": map[string]interface{}{
 			"protocolVersion": "2024-11-05",
 			"capabilities":    map[string]interface{}{},
-			"clientInfo":      map[string]interface{}{"name": "agentscan", "version": "1.0.0"},
+			"clientInfo":      map[string]interface{}{"name": "mcp-client", "version": "1.0.0"},
 		},
 	})
 	postURL := baseURL + resolvedPostPath
@@ -241,6 +270,7 @@ func newSSESession(ctx context.Context, baseURL, ssePath, hostname string, timeo
 		return nil
 	}
 	initReq.Header.Set("Content-Type", "application/json")
+	initReq.Header.Set("User-Agent", config.UserAgent)
 	initResp, err := client.Do(initReq)
 	if err != nil {
 		cancel()
@@ -289,6 +319,7 @@ func sseRequest(sess *sseSession, id int, method string, params interface{}) map
 		return nil
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", config.UserAgent)
 
 	resp, err := sess.client.Do(req)
 	if err != nil {
@@ -383,6 +414,7 @@ func sendNotification(ctx context.Context, client *http.Client, postURL, session
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("User-Agent", config.UserAgent)
 	if sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", sessionID)
 	}
@@ -408,6 +440,7 @@ func mcpRequest(ctx context.Context, client *http.Client, postURL, sessionID str
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("User-Agent", config.UserAgent)
 	if sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", sessionID)
 	}

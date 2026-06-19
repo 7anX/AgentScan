@@ -105,6 +105,13 @@ func commonFlags() []cli.Flag {
 			DefaultText: "",
 			Category:    "Scan",
 		},
+		&cli.IntFlag{
+			Name:        "delay",
+			Value:       0,
+			Usage:       "Delay between requests in ms (adds ±30% jitter), 0=no delay",
+			DefaultText: "0",
+			Category:    "Scan",
+		},
 		&cli.StringFlag{
 			Name:     "output",
 			Aliases:  []string{"o"},
@@ -159,6 +166,7 @@ OPTIONS:
      -T, --threads N           TCP scan concurrency (default: 500)
      --timeout MS              TCP timeout (default: 2000)
      --mcp-threads N           MCP probe concurrency (default: 50)
+     --delay MS                Delay between requests in ms, ±30% jitter (default: 0)
 
    Output
      HTML reports             Auto-written to agentscan-report-*/ and agentscan-a2a-*/
@@ -234,6 +242,7 @@ OPTIONS:
      -T, --threads N           TCP scan concurrency (default: 500)
      --timeout MS              TCP timeout (default: 2000)
      --a2a-threads N           A2A probe concurrency (default: 50)
+     --delay MS                Delay between requests in ms, ±30% jitter (default: 0)
 
    Output
      -o, --output FILE         Write JSON report
@@ -342,6 +351,7 @@ func runAction(c *cli.Context) error {
 	cfg.MCPConcurrency = c.Int("mcp-threads")
 	cfg.SkipPortScan = c.Bool("skip-port-scan")
 	cfg.Proxy = c.String("proxy")
+	cfg.DelayMs = c.Int("delay")
 
 	noColor := c.Bool("no-color") || output.NoColorEnabled()
 	format := c.String("format")
@@ -383,6 +393,7 @@ func runA2AAction(c *cli.Context) error {
 	cfg.MCPConcurrency = c.Int("a2a-threads")
 	cfg.SkipPortScan = c.Bool("skip-port-scan")
 	cfg.Proxy = c.String("proxy")
+	cfg.DelayMs = c.Int("delay")
 
 	noColor := c.Bool("no-color") || output.NoColorEnabled()
 	format := c.String("format")

@@ -41,7 +41,7 @@ func (p *A2APipeline) Run(ctx context.Context, targets []target.Target) []*model
 			})
 		}
 	} else {
-		portResults = ScanPorts(ctx, targets, p.cfg.Concurrency, p.cfg.TimeoutConnectMs, p.cfg.Verbose)
+		portResults = ScanPorts(ctx, targets, p.cfg.Concurrency, p.cfg.TimeoutConnectMs, p.cfg.Verbose, p.cfg.DelayMs)
 	}
 	if len(portResults) == 0 {
 		fmt.Fprintf(os.Stderr, "      no open ports found\n\n")
@@ -121,6 +121,8 @@ func (p *A2APipeline) RunFromCandidates(ctx context.Context, candidates []HTTPCa
 			defer wg.Done()
 			defer func() { <-sem }()
 			defer done.Add(1)
+
+			scanDelay(p.cfg.DelayMs)
 
 			candidateCtx, cancel := context.WithTimeout(ctx, a2aCandidateTimeout(p.cfg))
 			server := p.analyzeCandidate(candidateCtx, c)
