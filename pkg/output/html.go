@@ -88,8 +88,8 @@ type htmlServer struct {
 	HasAnyDetails      bool
 }
 
-func WriteHTMLReports(results []*models.MCPServer, baseDir string) (string, error) {
-	reportDir, err := createReportDir(baseDir)
+func WriteHTMLReports(results []*models.MCPServer, baseDir string, targets []string, filePath string) (string, error) {
+	reportDir, err := createReportDir(baseDir, targets, filePath)
 	if err != nil {
 		return "", err
 	}
@@ -115,13 +115,28 @@ func WriteHTMLReports(results []*models.MCPServer, baseDir string) (string, erro
 	return reportDir, nil
 }
 
-func createReportDir(baseDir string) (string, error) {
+func createReportDir(baseDir string, targets []string, filePath string) (string, error) {
 	if baseDir == "" {
 		baseDir = "."
 	}
 
-	name := "agentscan-report-" + time.Now().Format("20060102-150405")
-	path := filepath.Join(baseDir, name)
+	ts := time.Now().Format("20060102-150405")
+	targetSlug := reportTargetSlug(targets)
+	if targetSlug == "" && filePath != "" {
+		// -f targets.txt → 用文件名（不含扩展名）作为 slug
+		base := filepath.Base(filePath)
+		ext := filepath.Ext(base)
+		targetSlug = sanitizeSlug(strings.TrimSuffix(base, ext))
+	}
+
+	var base string
+	if targetSlug != "" {
+		base = "agentscan-" + targetSlug + "-" + ts
+	} else {
+		base = "agentscan-" + ts
+	}
+
+	path := filepath.Join(baseDir, base)
 	for i := 1; ; i++ {
 		err := os.Mkdir(path, 0755)
 		if err == nil {
@@ -130,8 +145,57 @@ func createReportDir(baseDir string) (string, error) {
 		if !os.IsExist(err) {
 			return "", fmt.Errorf("create HTML report directory: %w", err)
 		}
-		path = filepath.Join(baseDir, fmt.Sprintf("%s-%02d", name, i))
+		path = filepath.Join(baseDir, fmt.Sprintf("%s-%02d", base, i))
 	}
+}
+
+// reportTargetSlug 从目标列表生成文件系统安全的短名称。
+// 取第一个目标做 slug，多目标时追加 +N。
+func reportTargetSlug(targets []string) string {
+	if len(targets) == 0 {
+		return ""
+	}
+	slug := sanitizeSlug(targets[0])
+	if slug == "" {
+		return ""
+	}
+	if len(targets) > 1 {
+		slug += fmt.Sprintf("+%d", len(targets)-1)
+	}
+	return slug
+}
+
+// sanitizeSlug 将任意目标字符串转为文件系统安全的短名称：
+// 保留字母数字、点、连字符；其他字符替换为 "_"；最长 40 个字符。
+func sanitizeSlug(target string) string {
+	// 去掉协议前缀（http://、https://）
+	for _, prefix := range []string{"https://", "http://"} {
+		if strings.HasPrefix(target, prefix) {
+			target = target[len(prefix):]
+			break
+		}
+	}
+	// 去掉末尾斜杠
+	target = strings.TrimRight(target, "/")
+
+	var b strings.Builder
+	for _, r := range target {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '.' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	slug := b.String()
+	// 去掉连续下划线，保持可读性
+	for strings.Contains(slug, "__") {
+		slug = strings.ReplaceAll(slug, "__", "_")
+	}
+	slug = strings.Trim(slug, "_")
+	if len(slug) > 40 {
+		slug = slug[:40]
+	}
+	return slug
 }
 
 func writeHTMLReport(path string, results []*models.MCPServer, lang reportLanguage) error {

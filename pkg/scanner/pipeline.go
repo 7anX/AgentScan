@@ -436,7 +436,7 @@ func RunScan(ctx context.Context, rawTargets []string, filePath string,
 	}
 
 	fmt.Fprintf(os.Stderr, "report     generating html/txt files...\n")
-	reportDir, err := output.WriteHTMLReports(results, htmlReportBaseDir(outputPath))
+	reportDir, err := output.WriteHTMLReports(results, htmlReportBaseDir(outputPath), rawTargets, filePath)
 	if err != nil {
 		return results, fmt.Errorf("write HTML report: %w", err)
 	}
