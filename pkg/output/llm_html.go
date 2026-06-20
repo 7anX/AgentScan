@@ -72,21 +72,27 @@ func writeLLMStandaloneReport(path string, results []*models.LLMServer, lang rep
 
 // writeLLMTextReports generates all LLM text report files.
 func writeLLMTextReports(reportDir string, results []*models.LLMServer) error {
+	if len(results) == 0 {
+		return nil
+	}
+	subDir := filepath.Join(reportDir, "llm")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		return fmt.Errorf("create llm dir: %w", err)
+	}
 	files := map[string]string{
-		"llm_findings.txt":      buildLLMFindingsText(results, nil),
-		"llm_no_auth.txt":       buildLLMFindingsText(results, func(s *models.LLMServer) bool { return s.AuthStatus == "open" }),
-		"llm_auth_required.txt": buildLLMFindingsText(results, func(s *models.LLMServer) bool { return s.AuthStatus == "auth_required" }),
-		"llm_models.txt":        buildLLMModelsText(results),
-		"llm_evidence.txt":      buildLLMEvidenceText(results),
+		"findings.txt":      buildLLMFindingsText(results, nil),
+		"no_auth.txt":       buildLLMFindingsText(results, func(s *models.LLMServer) bool { return s.AuthStatus == "open" }),
+		"auth_required.txt": buildLLMFindingsText(results, func(s *models.LLMServer) bool { return s.AuthStatus == "auth_required" }),
+		"models.txt":        buildLLMModelsText(results),
+		"evidence.txt":      buildLLMEvidenceText(results),
 	}
 
 	for name, content := range files {
 		if content == "" {
 			continue
 		}
-		path := filepath.Join(reportDir, name)
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-			return fmt.Errorf("write %s: %w", name, err)
+		if err := os.WriteFile(filepath.Join(subDir, name), []byte(content), 0644); err != nil {
+			return fmt.Errorf("write llm/%s: %w", name, err)
 		}
 	}
 	return nil

@@ -108,9 +108,9 @@ func TestWriteA2AHTMLReportsCreatesChineseEnglishAndTextFiles(t *testing.T) {
 	}
 
 	summary := readFileForTest(t, filepath.Join(dir, "summary.txt"))
-	noAuth := readFileForTest(t, filepath.Join(dir, "a2a_no_auth.txt"))
-	allFindings := readFileForTest(t, filepath.Join(dir, "a2a_findings.txt"))
-	skills := readFileForTest(t, filepath.Join(dir, "a2a_skills.txt"))
+	noAuth := readFileForTest(t, filepath.Join(dir, "a2a", "no_auth.txt"))
+	allFindings := readFileForTest(t, filepath.Join(dir, "a2a", "findings.txt"))
+	skills := readFileForTest(t, filepath.Join(dir, "a2a", "skills.txt"))
 
 	for _, item := range []struct {
 		name    string

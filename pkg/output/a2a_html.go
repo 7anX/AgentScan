@@ -83,15 +83,25 @@ func writeA2AStandaloneReport(path string, results []*models.A2AServer, lang rep
 }
 
 func writeA2ATextReports(reportDir string, results []*models.A2AServer) error {
+	if len(results) == 0 {
+		return nil
+	}
+	subDir := filepath.Join(reportDir, "a2a")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		return fmt.Errorf("create a2a dir: %w", err)
+	}
 	files := map[string]string{
-		"a2a_findings.txt":      buildA2AFindingsText(results, func(*models.A2AServer) bool { return true }),
-		"a2a_no_auth.txt":       buildA2AFindingsText(results, func(s *models.A2AServer) bool { return s.NoAuth }),
-		"a2a_auth_required.txt": buildA2AFindingsText(results, func(s *models.A2AServer) bool { return s.AuthRequired }),
-		"a2a_skills.txt":        buildA2ASkillsText(results),
+		"findings.txt":      buildA2AFindingsText(results, func(*models.A2AServer) bool { return true }),
+		"no_auth.txt":       buildA2AFindingsText(results, func(s *models.A2AServer) bool { return s.NoAuth }),
+		"auth_required.txt": buildA2AFindingsText(results, func(s *models.A2AServer) bool { return s.AuthRequired }),
+		"skills.txt":        buildA2ASkillsText(results),
 	}
 	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(reportDir, name), []byte(content), 0644); err != nil {
-			return fmt.Errorf("write %s: %w", name, err)
+		if content == "" {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(subDir, name), []byte(content), 0644); err != nil {
+			return fmt.Errorf("write a2a/%s: %w", name, err)
 		}
 	}
 	return nil

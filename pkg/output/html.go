@@ -362,16 +362,26 @@ func sortedPrompts(items []models.MCPPrompt) []models.MCPPrompt {
 }
 
 func writeTextReports(reportDir string, results []*models.MCPServer) error {
+	if len(results) == 0 {
+		return nil
+	}
+	subDir := filepath.Join(reportDir, "mcp")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		return fmt.Errorf("create mcp dir: %w", err)
+	}
 	files := map[string]string{
-		"mcp_findings.txt":      buildFindingsText(results, func(*models.MCPServer) bool { return true }),
-		"mcp_no_auth.txt":       buildFindingsText(results, func(s *models.MCPServer) bool { return s.NoAuth && !s.AuthRequired }),
-		"mcp_auth_required.txt": buildFindingsText(results, func(s *models.MCPServer) bool { return s.AuthRequired }),
-		"mcp_tools.txt":         buildToolsText(results),
-		"mcp_evidence.txt":      buildEvidenceText(results),
+		"findings.txt":      buildFindingsText(results, func(*models.MCPServer) bool { return true }),
+		"no_auth.txt":       buildFindingsText(results, func(s *models.MCPServer) bool { return s.NoAuth && !s.AuthRequired }),
+		"auth_required.txt": buildFindingsText(results, func(s *models.MCPServer) bool { return s.AuthRequired }),
+		"tools.txt":         buildToolsText(results),
+		"evidence.txt":      buildEvidenceText(results),
 	}
 	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(reportDir, name), []byte(content), 0644); err != nil {
-			return fmt.Errorf("write %s: %w", name, err)
+		if content == "" {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(subDir, name), []byte(content), 0644); err != nil {
+			return fmt.Errorf("write mcp/%s: %w", name, err)
 		}
 	}
 	return nil

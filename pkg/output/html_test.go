@@ -85,10 +85,10 @@ func TestWriteHTMLReportsCreatesChineseAndEnglishReports(t *testing.T) {
 	}
 
 	summary := readFileForTest(t, filepath.Join(dir, "summary.txt"))
-	exposed := readFileForTest(t, filepath.Join(dir, "mcp_no_auth.txt"))
-	allFindings := readFileForTest(t, filepath.Join(dir, "mcp_findings.txt"))
-	tools := readFileForTest(t, filepath.Join(dir, "mcp_tools.txt"))
-	evidence := readFileForTest(t, filepath.Join(dir, "mcp_evidence.txt"))
+	exposed := readFileForTest(t, filepath.Join(dir, "mcp", "no_auth.txt"))
+	allFindings := readFileForTest(t, filepath.Join(dir, "mcp", "findings.txt"))
+	tools := readFileForTest(t, filepath.Join(dir, "mcp", "tools.txt"))
+	evidence := readFileForTest(t, filepath.Join(dir, "mcp", "evidence.txt"))
 
 	for _, item := range []struct {
 		name    string
@@ -181,8 +181,15 @@ func TestWriteUnifiedHTMLReportsContainsBothProtocols(t *testing.T) {
 		}
 	}
 
-	// Text files from both protocols should exist
-	for _, name := range []string{"summary.txt", "mcp_findings.txt", "mcp_tools.txt", "a2a_no_auth.txt", "a2a_skills.txt", "llm_findings.txt", "llm_models.txt"} {
+	// Text files from both protocols should exist in subdirectories
+	for _, name := range []string{
+		"summary.txt",
+		filepath.Join("mcp", "findings.txt"),
+		filepath.Join("a2a", "no_auth.txt"),
+		filepath.Join("a2a", "skills.txt"),
+		filepath.Join("llm", "findings.txt"),
+		filepath.Join("llm", "models.txt"),
+	} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Fatalf("missing report file %s: %v", name, err)
 		}
