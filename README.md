@@ -18,6 +18,8 @@
 
 ## 快速开始
 
+**Linux / macOS（从源码编译）**
+
 ```bash
 git clone https://github.com/7anX/AgentScan
 cd AgentScan
@@ -30,10 +32,22 @@ go build -o agentscan .
 ./agentscan scan 192.168.1.0/24
 
 # 跳过端口扫描，直接验证已知 host:port
-./agentscan scan -f targets.txt --skip-port-scan -o findings.json
+./agentscan scan -f targets.txt --skip-port-scan
 ```
 
-Windows：
+**Linux 预编译二进制（无需 Go 环境）**
+
+```bash
+# amd64
+curl -L https://github.com/7anX/AgentScan/releases/latest/download/agentscan_linux_amd64.tar.gz | tar xz
+chmod +x agentscan && sudo mv agentscan /usr/local/bin/
+
+# arm64（树莓派、ARM 云服务器）
+curl -L https://github.com/7anX/AgentScan/releases/latest/download/agentscan_linux_arm64.tar.gz | tar xz
+chmod +x agentscan && sudo mv agentscan /usr/local/bin/
+```
+
+**Windows**
 
 ```powershell
 go build -o agentscan.exe .
@@ -61,14 +75,6 @@ agentscan llm    # 只扫 LLM 推理 API
 -v, --verbose            显示探测详情
 ```
 
-## 输出
-
-```text
-results.json           # MCP
-results_a2a.json       # A2A
-results_llm.json       # LLM
-agentscan-report-*/    # HTML + TXT 报告（中英文）
-```
 
 ## 组合用法
 
@@ -76,10 +82,10 @@ agentscan-report-*/    # HTML + TXT 报告（中英文）
 # masscan 发现端口，AgentScan 做 AI 协议识别
 masscan 10.0.0.0/8 -p 80,443,8000,8080,11434 --rate 100000 -oL open_ports.txt
 awk '/open/ {print $4 ":" $3}' open_ports.txt > targets.txt
-agentscan scan -f targets.txt --skip-port-scan -o results.json
+agentscan scan -f targets.txt --skip-port-scan
 
 # 测绘平台结果二次验证
-agentscan scan -f fofa_export.txt --skip-port-scan --mcp-threads 200 -o verified.json
+agentscan scan -f fofa_export.txt --skip-port-scan --mcp-threads 200
 ```
 
 ## 博客
@@ -89,8 +95,6 @@ agentscan scan -f fofa_export.txt --skip-port-scan --mcp-threads 200 -o verified
 - [AgentScan 使用说明](https://7anx.github.io/posts/agentscan-use-cases/)
 - [AgentScan 工作原理](https://7anx.github.io/posts/agentscan-architecture/)
 
-## 注意
+## 免责声明
 
-只读探测：MCP 不调用 `tools/call`，A2A 不创建任务，LLM 不触发推理，不拉模型。
-
-请只扫描你拥有或被授权测试的目标。未授权扫描第三方系统可能违反法律法规。
+本工具仅面向合法授权的企业安全建设行为。使用前请确保已获得授权，符合当地法律法规，不对非授权目标扫描。作者不承担任何非法使用产生的后果。
