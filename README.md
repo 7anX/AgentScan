@@ -95,6 +95,10 @@ agentscan scan -f fofa_export.txt --skip-port-scan --mcp-threads 200
 - [AgentScan 使用说明](https://7anx.github.io/posts/agentscan-use-cases/)
 - [AgentScan 工作原理](https://7anx.github.io/posts/agentscan-architecture/)
 
+## 社区
+
+本项目在 [LINUX DO](https://linux.do) 社区开源推广。
+
 ## 免责声明
 
 本工具仅面向合法授权的企业安全建设行为。使用前请确保已获得授权，符合当地法律法规，不对非授权目标扫描。作者不承担任何非法使用产生的后果。
