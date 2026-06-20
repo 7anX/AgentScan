@@ -351,15 +351,15 @@ func runLLMAction(c *cli.Context) error {
 	}
 	cfg.Concurrency = c.Int("threads")
 	cfg.TimeoutConnectMs = c.Int("timeout")
+	cfg.MCPConcurrency = c.Int("llm-threads")
+	sanitizeConfig(&cfg)
 	cfg.TimeoutHTTPMs = cfg.TimeoutConnectMs * 5
 	cfg.TimeoutMCPMs = cfg.TimeoutConnectMs * 10
 	cfg.VerboseRaw = c.Bool("verbose-raw")
 	cfg.Verbose = c.Bool("verbose")
-	cfg.MCPConcurrency = c.Int("llm-threads")
 	cfg.SkipPortScan = c.Bool("skip-port-scan")
 	cfg.Proxy = c.String("proxy")
 	cfg.DelayMs = c.Int("delay")
-	sanitizeConfig(&cfg)
 
 	noColor := c.Bool("no-color") || output.NoColorEnabled()
 	format := c.String("format")
@@ -455,16 +455,16 @@ func runAction(c *cli.Context) error {
 	}
 	cfg.Concurrency = c.Int("threads")
 	cfg.TimeoutConnectMs = c.Int("timeout")
+	cfg.MCPConcurrency = c.Int("mcp-threads")
+	sanitizeConfig(&cfg)
 	cfg.TimeoutHTTPMs = cfg.TimeoutConnectMs * 10
 	cfg.TimeoutMCPMs = cfg.TimeoutConnectMs * 20
 	cfg.ExcludeHoneypots = c.Bool("exclude-honeypots")
 	cfg.VerboseRaw = c.Bool("verbose-raw")
 	cfg.Verbose = c.Bool("verbose")
-	cfg.MCPConcurrency = c.Int("mcp-threads")
 	cfg.SkipPortScan = c.Bool("skip-port-scan")
 	cfg.Proxy = c.String("proxy")
 	cfg.DelayMs = c.Int("delay")
-	sanitizeConfig(&cfg)
 
 	noColor := c.Bool("no-color") || output.NoColorEnabled()
 	format := c.String("format")
@@ -498,16 +498,16 @@ func runA2AAction(c *cli.Context) error {
 	}
 	cfg.Concurrency = c.Int("threads")
 	cfg.TimeoutConnectMs = c.Int("timeout")
+	cfg.MCPConcurrency = c.Int("a2a-threads")
+	sanitizeConfig(&cfg)
 	cfg.TimeoutHTTPMs = cfg.TimeoutConnectMs * 10
 	// A2A probe = card fetch + 1-2 JSON-RPC calls; 4x is sufficient and avoids 45s per-candidate caps
 	cfg.TimeoutMCPMs = cfg.TimeoutConnectMs * 4
 	cfg.VerboseRaw = c.Bool("verbose-raw")
 	cfg.Verbose = c.Bool("verbose")
-	cfg.MCPConcurrency = c.Int("a2a-threads")
 	cfg.SkipPortScan = c.Bool("skip-port-scan")
 	cfg.Proxy = c.String("proxy")
 	cfg.DelayMs = c.Int("delay")
-	sanitizeConfig(&cfg)
 
 	noColor := c.Bool("no-color") || output.NoColorEnabled()
 	format := c.String("format")
