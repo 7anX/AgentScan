@@ -126,10 +126,14 @@ func buildLLMModelsText(results []*models.LLMServer) string {
 	var b strings.Builder
 	b.WriteString("# AgentScan LLM 暴露模型列表\n")
 	b.WriteString("# URL\t框架\t模型ID\n\n")
+	headerLen := b.Len()
 	for _, r := range results {
 		for _, m := range r.Models {
 			fmt.Fprintf(&b, "%s\t%s\t%s\n", r.URL, r.Framework, m.ID)
 		}
+	}
+	if b.Len() == headerLen {
+		return ""
 	}
 	return b.String()
 }
@@ -137,6 +141,7 @@ func buildLLMModelsText(results []*models.LLMServer) string {
 func buildLLMEvidenceText(results []*models.LLMServer) string {
 	var b strings.Builder
 	b.WriteString("# AgentScan LLM 探测证据\n\n")
+	headerLen := b.Len()
 	for _, r := range results {
 		fmt.Fprintf(&b, "## %s (%s)\n", r.URL, r.Framework)
 		for _, ep := range r.Evidence.MatchedEndpoints {
@@ -148,6 +153,9 @@ func buildLLMEvidenceText(results []*models.LLMServer) string {
 				matched, ep.Method, ep.Path, ep.StatusCode, ep.ResponseMs)
 		}
 		b.WriteString("\n")
+	}
+	if b.Len() == headerLen {
+		return ""
 	}
 	return b.String()
 }
