@@ -92,11 +92,18 @@ func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string
 			defer wg.Done()
 			url := baseURL + ep
 
-			r := tryStreamableHTTP(probeCtx, client, url, ep, timeout, dict.MCPAuthPaths)
-			if r != nil {
-				r.Endpoint = ep
-				resultCh <- result{r, priority}
-				return
+			// 已知 SSE 路径跳过 Streamable HTTP，直接走 SSE legacy，省去 3s 超时等待
+			isKnownSSEPath := dict.SSELegacyPaths[ep] ||
+				strings.HasSuffix(ep, "/sse") ||
+				strings.HasSuffix(ep, "/sse/")
+
+			if !isKnownSSEPath {
+				r := tryStreamableHTTP(probeCtx, client, url, ep, timeout, dict.MCPAuthPaths)
+				if r != nil {
+					r.Endpoint = ep
+					resultCh <- result{r, priority}
+					return
+				}
 			}
 
 			// 判断是否应尝试 SSE legacy：
@@ -104,9 +111,7 @@ func ProbeMCPWithHostname(ctx context.Context, baseURL, hostname, urlPath string
 			// 2. 路径以 /sse 或 /sse/ 结尾（兼容自定义前缀，如 /9da4ht4y/sse）
 			// 3. 以上都不满足时，做一次轻量 GET 探测：若响应 Content-Type 是
 			//    text/event-stream，则这是一个 SSE endpoint（路径名不含 "sse" 也能识别）
-			isSSEPath := dict.SSELegacyPaths[ep] ||
-				strings.HasSuffix(ep, "/sse") ||
-				strings.HasSuffix(ep, "/sse/")
+			isSSEPath := isKnownSSEPath
 			if !isSSEPath {
 				isSSEPath = isSSEEndpoint(probeCtx, client, url)
 			}
@@ -685,8 +690,6 @@ func relevantHeaders(headers http.Header) map[string]string {
 		"Content-Type",
 		"Server",
 		"WWW-Authenticate",
-		"MCP-Protocol-Version",
-		"MCP-Session-Id",
 		"Mcp-Protocol-Version",
 		"Mcp-Session-Id",
 		"Location",
@@ -752,7 +755,7 @@ func isMCPAuthRequiredWithEvidence(resp *http.Response, endpoint string, authPat
 	hasMCPHeader := false
 	hasAuthChallenge := false
 	hasJSONRPC := false
-	if resp.Header.Get("MCP-Protocol-Version") != "" || resp.Header.Get("MCP-Session-Id") != "" {
+	if resp.Header.Get("Mcp-Protocol-Version") != "" || resp.Header.Get("Mcp-Session-Id") != "" {
 		hasMCPHeader = true
 		score += 2
 		evidence.Reasons = append(evidence.Reasons, "MCP response header present")

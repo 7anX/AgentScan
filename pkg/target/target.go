@@ -148,7 +148,10 @@ func ParseFile(path string, ports []int) ([]Target, error) {
 		}
 		targets = append(targets, ts...)
 	}
-	return targets, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return targets, fmt.Errorf("scan %s: %w", path, err)
+	}
+	return targets, nil
 }
 
 // buildTargets 从 IP 列表 + 端口列表构建目标，保留 hostname 用于 SNI
@@ -189,7 +192,13 @@ func parseCIDR(cidr string, ports []int) ([]Target, error) {
 	ip := make(net.IP, len(ipnet.IP))
 	copy(ip, ipnet.IP.Mask(ipnet.Mask))
 
-	var targets []Target
+	// Pre-allocate: avoid repeated slice growth for common CIDR sizes.
+	// bits-ones is bounded to ≤20 by the check above (max /12 = 2^20 hosts).
+	numHosts := (1 << uint(bits-ones)) - 2
+	if numHosts < 0 {
+		numHosts = 0
+	}
+	targets := make([]Target, 0, numHosts*len(ports))
 	for ; ipnet.Contains(ip); inc(ip) {
 		ipStr := ip.String()
 		if ipStr == ipnet.IP.String() || ipStr == broadcastStr {
