@@ -1,12 +1,12 @@
 # AgentScan
 
-> 一条命令盘点 MCP、A2A Agent Card 和 LLM 推理 API 暴露面。
+> 一条命令盘点 MCP、A2A Agent Card 和 LLM 开放接口暴露面。
 
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go)](https://go.dev)
 [![GitHub stars](https://img.shields.io/github/stars/7anX/AgentScan?style=social)](https://github.com/7anX/AgentScan/stargazers)
 [![License](https://img.shields.io/github/license/7anX/AgentScan)](LICENSE)
 
-传统端口扫描器只告诉你"这里有个 HTTP 服务"。AgentScan 继续往下走一层：判断这个服务是不是 MCP、是不是 A2A Agent、是不是开放的 LLM 推理 API，并输出可用工具、Agent 能力、模型列表和认证状态。
+传统端口扫描器只告诉你"这里有个 HTTP 服务"。AgentScan 继续往下走一层：判断这个服务是不是 MCP、是不是 A2A Agent、是不是开放的 LLM 接口，并输出可用工具、Agent 能力、模型列表和认证状态。
 
 ## 能扫什么
 
@@ -14,7 +14,7 @@
 | --- | --- |
 | MCP Server | Streamable HTTP、HTTP+SSE legacy、工具/资源/提示词列表、认证状态、蜜罐信号 |
 | A2A Agent | Agent Card、skills、interfaces、无认证 JSON-RPC 可达性、私网地址泄露 |
-| LLM 推理 API | Ollama、vLLM、SGLang、TGI、llama.cpp、Xinference、LiteLLM、FastChat、LocalAI、LM Studio、LMDeploy |
+| LLM 开放接口 | Ollama、vLLM、SGLang、TGI、llama.cpp、Xinference、LiteLLM、FastChat、LocalAI、LM Studio、LMDeploy |
 
 ## 快速开始
 
@@ -60,7 +60,7 @@ go build -o agentscan.exe .
 agentscan scan   # MCP + A2A + LLM 全协议扫描（最常用）
 agentscan mcp    # 只扫 MCP
 agentscan a2a    # 只扫 A2A Agent Card
-agentscan llm    # 只扫 LLM 推理 API
+agentscan llm    # 只扫 LLM 开放接口
 ```
 
 常用参数：
