@@ -1,5 +1,7 @@
 # AgentScan
 
+[English](README_en.md) | 中文
+
 > 一条命令盘点 MCP、A2A Agent Card 和 LLM 开放接口暴露面。
 
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go)](https://go.dev)
