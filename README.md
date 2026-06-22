@@ -104,3 +104,16 @@ agentscan scan -f fofa_export.txt --skip-port-scan --mcp-threads 200
 ## 免责声明
 
 本工具仅面向合法授权的企业安全建设行为。使用前请确保已获得授权，符合当地法律法规，不对非授权目标扫描。作者不承担任何非法使用产生的后果。
+
+## Sponsors
+
+感谢以下安全社区对本项目的支持：
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="docs/yunkunlab.jpg" alt="云鲲安全实验室" width="120"><br>
+      <b>云鲲安全实验室</b>
+    </td>
+  </tr>
+</table>
