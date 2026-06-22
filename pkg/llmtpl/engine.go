@@ -255,7 +255,7 @@ func executeRequests(ctx context.Context, client *http.Client, baseURL string, r
 			defer wg.Done()
 			defer func() {
 				if rv := recover(); rv != nil {
-					// Swallow panic — treat as failed request
+					_ = rv // Swallow panic — treat as failed request
 				}
 			}()
 

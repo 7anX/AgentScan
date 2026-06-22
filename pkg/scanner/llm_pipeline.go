@@ -147,7 +147,7 @@ func (p *LLMPipeline) RunFromCandidates(ctx context.Context, candidates []HTTPCa
 			defer done.Add(1)
 			defer func() {
 				if rv := recover(); rv != nil {
-					// Swallow panic — treat as failed candidate
+					_ = rv // Swallow panic — treat as failed candidate
 				}
 			}()
 
