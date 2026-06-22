@@ -91,10 +91,10 @@ agentscan scan -f fofa_export.txt --skip-port-scan --mcp-threads 200
 
 ## Blog
 
-- [MCP Attack Surface](https://7anx.github.io/posts/mcp-attack-surface/) *(Chinese)*
-- [A2A Attack Surface](https://7anx.github.io/posts/a2a-attack-surface/) *(Chinese)*
-- [AgentScan Use Cases](https://7anx.github.io/posts/agentscan-use-cases/) *(Chinese)*
-- [AgentScan Architecture](https://7anx.github.io/posts/agentscan-architecture/) *(Chinese)*
+- [MCP Attack Surface](https://7anx.github.io/security-research/mcp-attack-surface/) *(Chinese)*
+- [A2A Attack Surface](https://7anx.github.io/security-research/a2a-attack-surface/) *(Chinese)*
+- [AgentScan Use Cases](https://7anx.github.io/agentscan/agentscan-use-cases/) *(Chinese)*
+- [AgentScan Architecture](https://7anx.github.io/agentscan/agentscan-architecture/) *(Chinese)*
 
 ## Contributing
 
