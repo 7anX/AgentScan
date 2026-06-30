@@ -55,6 +55,26 @@ type MCPCapabilities struct {
 	Experimental interface{} `json:"experimental,omitempty"`
 }
 
+// OAuthMeta OAuth 2.0 发现元数据（仅对 auth-required 服务器填充）。
+// 遵循 RFC 9728（受保护资源）→ RFC 8414（授权服务器）两阶段发现链。
+type OAuthMeta struct {
+	// 受保护资源元数据（/.well-known/oauth-protected-resource，RFC 9728）
+	ResourceURL            string   `json:"resource_url,omitempty"`
+	AuthorizationServers   []string `json:"authorization_servers,omitempty"`
+	BearerMethodsSupported []string `json:"bearer_methods_supported,omitempty"`
+	ScopesSupported        []string `json:"scopes_supported,omitempty"`
+
+	// 授权服务器元数据（/.well-known/oauth-authorization-server，RFC 8414）
+	Issuer                string   `json:"issuer,omitempty"`
+	AuthorizationEndpoint string   `json:"authorization_endpoint,omitempty"`
+	TokenEndpoint         string   `json:"token_endpoint,omitempty"`
+	RegistrationEndpoint  string   `json:"registration_endpoint,omitempty"`
+	GrantTypesSupported   []string `json:"grant_types_supported,omitempty"`
+
+	// 实际命中的探测路径（哪个 well-known URL 返回了数据）
+	DiscoveryURL string `json:"discovery_url,omitempty"`
+}
+
 // HoneypotResult 蜜罐检测结果
 type HoneypotResult struct {
 	Suspected bool     `json:"suspected"`
@@ -124,6 +144,7 @@ type MCPServer struct {
 	Prompts               []MCPPrompt           `json:"prompts,omitempty"`
 	PromptCount           int                   `json:"prompt_count"`
 	Honeypot              HoneypotResult        `json:"honeypot"`
+	OAuthMeta             *OAuthMeta            `json:"oauth_meta,omitempty"`
 	ScanTime              time.Time             `json:"scan_time"`
 	ResponseTimeMs        float64               `json:"response_time_ms"`
 	TLSEnabled            bool                  `json:"tls_enabled"`

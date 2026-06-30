@@ -326,8 +326,11 @@ func (p *Pipeline) analyzeCandidate(ctx context.Context, c HTTPCandidate) *model
 		}
 	}
 
-	// auth-required：无法枚举工具或做蜜罐检测，直接返回
+	// auth-required：无法枚举工具或做蜜罐检测；
+	// 但 OAuth 发现端点是公开的，尝试提取授权服务器元数据。
 	if probe.AuthRequired {
+		wwwAuth := probe.Evidence.ResponseHeaders["Www-Authenticate"]
+		server.OAuthMeta = probeOAuthMeta(ctx, c.BaseURL, probe.Endpoint, c.Hostname, wwwAuth, p.cfg.TimeoutHTTPMs)
 		return server
 	}
 

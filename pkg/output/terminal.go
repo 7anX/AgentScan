@@ -70,6 +70,20 @@ func FprintServer(w io.Writer, s *models.MCPServer, noColor bool) {
 
 	if s.AuthRequired {
 		fmt.Fprintf(w, "      %sauth%s     tools/resources unavailable until authenticated\n", warning, reset)
+		if m := s.OAuthMeta; m != nil {
+			if len(m.AuthorizationServers) > 0 {
+				fmt.Fprintf(w, "      oauth    as=%s\n", strings.Join(m.AuthorizationServers, ", "))
+			}
+			if m.TokenEndpoint != "" {
+				fmt.Fprintf(w, "               token=%s\n", m.TokenEndpoint)
+			}
+			if m.RegistrationEndpoint != "" {
+				fmt.Fprintf(w, "               register=%s\n", m.RegistrationEndpoint)
+			}
+			if len(m.ScopesSupported) > 0 {
+				fmt.Fprintf(w, "               scopes=%s\n", strings.Join(m.ScopesSupported, " "))
+			}
+		}
 	} else {
 		if server := serverLabel(s); server != "" {
 			fmt.Fprintf(w, "      server   %s\n", server)

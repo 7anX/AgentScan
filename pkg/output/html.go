@@ -57,6 +57,17 @@ type reportLanguage struct {
 	AuthReasons          string
 	None                 string
 
+	// ── OAuth 发现专用 ──
+	OAuthDiscovery    string
+	OAuthDiscoveryURL string
+	OAuthAuthServers  string
+	OAuthIssuer       string
+	OAuthTokenEP      string
+	OAuthAuthEP       string
+	OAuthRegEP        string
+	OAuthScopes       string
+	OAuthGrantTypes   string
+
 	// ── A2A 专用 ──
 	A2ADeclaredAuth    string
 	A2ACardURL         string
@@ -109,6 +120,7 @@ type htmlServer struct {
 	HoneypotScore      int
 	HoneypotSignals    string
 	AuthRequired       bool
+	OAuthMeta          *models.OAuthMeta
 	Tools              []models.MCPTool
 	Resources          []models.MCPResource
 	ResourceTemplates  []models.MCPResourceTemplate
@@ -314,6 +326,7 @@ func buildHTMLServersLang(results []*models.MCPServer, zh bool) []htmlServer {
 			HoneypotScore:      r.Honeypot.Score,
 			HoneypotSignals:    strings.Join(r.Honeypot.Signals, ", "),
 			AuthRequired:       r.AuthRequired,
+			OAuthMeta:          r.OAuthMeta,
 			Tools:              sortedTools(r.Tools),
 			Resources:          sortedResources(r.Resources),
 			ResourceTemplates:  sortedResourceTemplates(r.ResourceTemplates),
@@ -607,6 +620,16 @@ func zhReportLanguage() reportLanguage {
 		AuthReasons:          "认证原因",
 		None:                 "无",
 
+		OAuthDiscovery:    "OAuth 认证发现",
+		OAuthDiscoveryURL: "探测路径",
+		OAuthAuthServers:  "授权服务器",
+		OAuthIssuer:       "颁发者",
+		OAuthTokenEP:      "Token 端点",
+		OAuthAuthEP:       "授权端点",
+		OAuthRegEP:        "注册端点 (CIMD/DCR)",
+		OAuthScopes:       "授权范围",
+		OAuthGrantTypes:   "授权类型",
+
 		A2ADeclaredAuth:    "声明认证",
 		A2ACardURL:         "Agent 卡片地址",
 		A2AExposureSignals: "暴露信号",
@@ -678,6 +701,16 @@ func enReportLanguage() reportLanguage {
 		FingerprintSignals:   "Fingerprint",
 		AuthReasons:          "Auth reasons",
 		None:                 "None",
+
+		OAuthDiscovery:    "OAuth Discovery",
+		OAuthDiscoveryURL: "Discovery URL",
+		OAuthAuthServers:  "Authorization Servers",
+		OAuthIssuer:       "Issuer",
+		OAuthTokenEP:      "Token Endpoint",
+		OAuthAuthEP:       "Authorization Endpoint",
+		OAuthRegEP:        "Registration Endpoint (CIMD/DCR)",
+		OAuthScopes:       "Scopes",
+		OAuthGrantTypes:   "Grant Types",
 
 		A2ADeclaredAuth:    "Declared Auth",
 		A2ACardURL:         "Card URL",
@@ -938,9 +971,40 @@ var htmlTemplate = template.Must(template.New("html-report").Parse(`<!doctype ht
             {{range .ResponseHeaders}}<li><code>{{.}}</code></li>{{end}}
           </ul>
           {{end}}
-          {{if .AuthRequired}}
+            {{if .AuthRequired}}
             <p class="muted">{{$.Lang.UnavailableAuth}}</p>
-          {{end}}
+            {{if .OAuthMeta}}
+            <div class="oauth-meta">
+              <h3>{{$.Lang.OAuthDiscovery}}</h3>
+              <div class="evidence-grid">
+                {{if .OAuthMeta.DiscoveryURL}}
+                <div class="kv wide"><span>{{$.Lang.OAuthDiscoveryURL}}</span><code>{{.OAuthMeta.DiscoveryURL}}</code></div>
+                {{end}}
+                {{if .OAuthMeta.AuthorizationServers}}
+                <div class="kv wide"><span>{{$.Lang.OAuthAuthServers}}</span>{{range .OAuthMeta.AuthorizationServers}}<code>{{.}}</code> {{end}}</div>
+                {{end}}
+                {{if .OAuthMeta.Issuer}}
+                <div class="kv wide"><span>{{$.Lang.OAuthIssuer}}</span><code>{{.OAuthMeta.Issuer}}</code></div>
+                {{end}}
+                {{if .OAuthMeta.TokenEndpoint}}
+                <div class="kv wide"><span>{{$.Lang.OAuthTokenEP}}</span><code>{{.OAuthMeta.TokenEndpoint}}</code></div>
+                {{end}}
+                {{if .OAuthMeta.AuthorizationEndpoint}}
+                <div class="kv wide"><span>{{$.Lang.OAuthAuthEP}}</span><code>{{.OAuthMeta.AuthorizationEndpoint}}</code></div>
+                {{end}}
+                {{if .OAuthMeta.RegistrationEndpoint}}
+                <div class="kv wide"><span>{{$.Lang.OAuthRegEP}}</span><code>{{.OAuthMeta.RegistrationEndpoint}}</code></div>
+                {{end}}
+                {{if .OAuthMeta.ScopesSupported}}
+                <div class="kv wide"><span>{{$.Lang.OAuthScopes}}</span>{{range .OAuthMeta.ScopesSupported}}<code>{{.}}</code> {{end}}</div>
+                {{end}}
+                {{if .OAuthMeta.GrantTypesSupported}}
+                <div class="kv wide"><span>{{$.Lang.OAuthGrantTypes}}</span>{{range .OAuthMeta.GrantTypesSupported}}<code>{{.}}</code> {{end}}</div>
+                {{end}}
+              </div>
+            </div>
+            {{end}}
+            {{end}}
           {{if .HoneypotSuspected}}
             <p><strong>{{$.Lang.HoneypotSignals}}:</strong> {{.HoneypotSignals}}</p>
           {{end}}

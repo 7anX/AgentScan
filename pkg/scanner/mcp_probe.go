@@ -760,6 +760,14 @@ func isMCPAuthRequiredWithEvidence(resp *http.Response, endpoint string, authPat
 		score += 2
 		evidence.Reasons = append(evidence.Reasons, "MCP response header present")
 	}
+	// RFC 9728: WWW-Authenticate containing resource_metadata pointing to /.well-known/oauth-protected-resource
+	// is a definitive MCP OAuth discovery signal — only MCP servers emit this exact combination.
+	wwwAuth := resp.Header.Get("WWW-Authenticate")
+	if strings.Contains(wwwAuth, "resource_metadata=") && strings.Contains(wwwAuth, "oauth-protected-resource") {
+		hasMCPHeader = true // treat as equivalent to MCP-specific header for scoring
+		score += 3
+		evidence.Reasons = append(evidence.Reasons, "WWW-Authenticate resource_metadata MCP OAuth signal (RFC 9728)")
+	}
 	if code == 401 || code == 403 || (code == 400 && resp.Header.Get("WWW-Authenticate") != "") {
 		hasAuthChallenge = true
 		score++

@@ -512,7 +512,38 @@ const mcpSectionHTML = `
                   <div class="kv wide"><span>{{$.Lang.AuthReasons}}</span>{{if .AuthReasons}}<div class="reason-list">{{range .AuthReasons}}<div>{{.}}</div>{{end}}</div>{{else}}-{{end}}</div>
                 </div>
                 {{if .ResponseHeaders}}<h3>{{$.Lang.ResponseHeaders}}</h3><ul>{{range .ResponseHeaders}}<li><code>{{.}}</code></li>{{end}}</ul>{{end}}
-                {{if .AuthRequired}}<p class="muted">{{$.Lang.UnavailableAuth}}</p>{{end}}
+                {{if .AuthRequired}}<p class="muted">{{$.Lang.UnavailableAuth}}</p>
+                {{if .OAuthMeta}}
+                <div class="oauth-meta">
+                  <h3>{{$.Lang.OAuthDiscovery}}</h3>
+                  <div class="evidence-grid">
+                    {{if .OAuthMeta.DiscoveryURL}}
+                    <div class="kv wide"><span>{{$.Lang.OAuthDiscoveryURL}}</span><code>{{.OAuthMeta.DiscoveryURL}}</code></div>
+                    {{end}}
+                    {{if .OAuthMeta.AuthorizationServers}}
+                    <div class="kv wide"><span>{{$.Lang.OAuthAuthServers}}</span>{{range .OAuthMeta.AuthorizationServers}}<code>{{.}}</code> {{end}}</div>
+                    {{end}}
+                    {{if .OAuthMeta.Issuer}}
+                    <div class="kv wide"><span>{{$.Lang.OAuthIssuer}}</span><code>{{.OAuthMeta.Issuer}}</code></div>
+                    {{end}}
+                    {{if .OAuthMeta.TokenEndpoint}}
+                    <div class="kv wide"><span>{{$.Lang.OAuthTokenEP}}</span><code>{{.OAuthMeta.TokenEndpoint}}</code></div>
+                    {{end}}
+                    {{if .OAuthMeta.AuthorizationEndpoint}}
+                    <div class="kv wide"><span>{{$.Lang.OAuthAuthEP}}</span><code>{{.OAuthMeta.AuthorizationEndpoint}}</code></div>
+                    {{end}}
+                    {{if .OAuthMeta.RegistrationEndpoint}}
+                    <div class="kv wide"><span>{{$.Lang.OAuthRegEP}}</span><code>{{.OAuthMeta.RegistrationEndpoint}}</code></div>
+                    {{end}}
+                    {{if .OAuthMeta.ScopesSupported}}
+                    <div class="kv wide"><span>{{$.Lang.OAuthScopes}}</span>{{range .OAuthMeta.ScopesSupported}}<code>{{.}}</code> {{end}}</div>
+                    {{end}}
+                    {{if .OAuthMeta.GrantTypesSupported}}
+                    <div class="kv wide"><span>{{$.Lang.OAuthGrantTypes}}</span>{{range .OAuthMeta.GrantTypesSupported}}<code>{{.}}</code> {{end}}</div>
+                    {{end}}
+                  </div>
+                </div>
+                {{end}}{{end}}
                 {{if .HoneypotSuspected}}<p><strong>{{$.Lang.HoneypotSignals}}:</strong> {{.HoneypotSignals}}</p>{{end}}
                 {{if .HasAnyDetails}}
                   {{if .Tools}}<h3>{{$.Lang.ToolList}}</h3><ul>{{range .Tools}}<li><strong>{{.Name}}</strong>{{if .Description}} <span class="description">{{.Description}}</span>{{end}}</li>{{end}}</ul>{{end}}
